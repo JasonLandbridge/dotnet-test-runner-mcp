@@ -29,7 +29,7 @@ Requires the **.NET 10 SDK** on the machine running the server.
 Once the package is published to NuGet, use the same command on Linux, Windows, and macOS:
 
 ```bash
-dotnet tool install --global dotnet-test-runner-mcp --version 0.0.1-beta.5
+dotnet tool install --global dotnet-test-runner-mcp
 ```
 
 The executable is `dotnet-test-runner-mcp` (`dotnet-test-runner-mcp.exe` on Windows). Make sure your agent can find it on `PATH`, or use its absolute path:
@@ -44,7 +44,7 @@ dotnet pack src/DotnetTest.Mcp -c Release -o ./artifacts/package
 ```
 
 ```bash
-dotnet tool install --global dotnet-test-runner-mcp --version 0.0.1-beta.5 --add-source ./artifacts/package
+dotnet tool install --global dotnet-test-runner-mcp --prerelease --add-source ./artifacts/package
 ```
 
 ## Connect your agent
