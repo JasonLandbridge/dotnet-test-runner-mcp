@@ -11,7 +11,6 @@ namespace DotnetTestRunnerMcp.Tools;
 public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandRunner commandRunner)
 {
     private const int MaxReturnedTests = 200;
-    private const int MaxProjectsToScan = 8;
     private static readonly TimeSpan PerProjectListTestsTimeout = TimeSpan.FromSeconds(20);
 
     private readonly McpOptions _options = options.ValidateNotNull().Value;
@@ -43,28 +42,14 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
             ? null
             : workingDirectory.Trim();
 
-        var testProjects = await TestProjectDiscovery.ListAsync(
-            _commandRunner,
-            _options,
-            trimmedWorkingDirectory,
-            cancellationToken
-        );
-
-        if (trimmedProjectPath is not null)
-        {
-            testProjects = testProjects
-                .Where(project =>
-                    string.Equals(project, trimmedProjectPath, StringComparison.Ordinal)
-                )
-                .ToArray();
-
-            if (testProjects.Length == 0)
-                testProjects = [trimmedProjectPath];
-        }
-        else if (testProjects.Length > MaxProjectsToScan)
-        {
-            testProjects = testProjects.Take(MaxProjectsToScan).ToArray();
-        }
+        string[] testProjects = trimmedProjectPath is not null
+            ? [trimmedProjectPath]
+            : await TestProjectDiscovery.ListAsync(
+                _commandRunner,
+                _options,
+                trimmedWorkingDirectory,
+                cancellationToken
+            );
 
         if (testProjects.Length == 0)
         {
@@ -123,10 +108,7 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
                 allTests.AddRange(discovery.Tests);
         }
 
-        var tests = allTests
-            .Distinct(StringComparer.Ordinal)
-            .OrderBy(value => value, StringComparer.Ordinal)
-            .ToArray();
+        var tests = allTests.OrderBy(value => value, StringComparer.Ordinal).ToArray();
         var testCount = tests.Length;
         var returnedTests = includeTests ? tests.Take(MaxReturnedTests).ToArray() : [];
         var returnedCount = includeTests ? returnedTests.Length : 0;

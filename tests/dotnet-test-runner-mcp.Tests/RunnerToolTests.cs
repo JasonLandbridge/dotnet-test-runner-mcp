@@ -39,6 +39,54 @@ public sealed class RunnerToolTests
     }
 
     [Fact]
+    public async Task RunAllTestsInClass_WhenProjectIsNotSpecified_SkipsNonTestHelperProject()
+    {
+        var rootDirectory = Path.Combine(Path.GetTempPath(), $"runner-tests-{Guid.NewGuid():N}");
+        var projectPath = "tests/Real.Tests/Real.Tests.csproj";
+        var fullProjectPath = Path.Combine(rootDirectory, projectPath);
+        Directory.CreateDirectory(Path.GetDirectoryName(fullProjectPath)!);
+        File.WriteAllText(
+            fullProjectPath,
+            """
+            <Project>
+              <ItemGroup>
+                <PackageReference Include="Microsoft.NET.Test.Sdk" />
+              </ItemGroup>
+            </Project>
+            """
+        );
+
+        try
+        {
+            var runner = new DiscoveryFakeCommandRunner(
+                """
+                Project(s)
+                ----------
+                tests/BaseTests/BaseTests.csproj
+                tests/Real.Tests/Real.Tests.csproj
+                """
+            );
+            var tool = new RunAllTestsInClassTool(
+                runner,
+                new JsonSerializerOptions(),
+                Options.Create(new McpOptions { WorkingDirectory = rootDirectory })
+            );
+
+            var result = await tool.RunAllTestsInClass(
+                "Real.Tests.SampleTests",
+                workingDirectory: rootDirectory
+            );
+
+            Assert.Equal(TestOutcome.Passed, result.Outcome);
+            Assert.Equal(1, result.TestCount);
+        }
+        finally
+        {
+            Directory.Delete(rootDirectory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RunAllTests_WhenCtrfIsUnavailable_UsesConsoleSummaryAfterRetry()
     {
         var runner = new FakeCommandRunner(
@@ -90,6 +138,52 @@ public sealed class RunnerToolTests
             """
         );
         return projectPath;
+    }
+
+    private sealed class DiscoveryFakeCommandRunner(string solutionOutput) : ICommandRunner
+    {
+        public Task<CommandResult> RunAsync(
+            CommandRequest request,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var isSolutionListing = request.Arguments.SequenceEqual(
+                ["sln", "list"],
+                StringComparer.Ordinal
+            );
+            var isMetadataEvaluation =
+                request.Arguments.Length > 1 && request.Arguments[0] == "msbuild";
+            var isRealProject = request.Arguments.Contains(
+                "tests/Real.Tests/Real.Tests.csproj",
+                StringComparer.Ordinal
+            );
+            var output = isSolutionListing
+                ? solutionOutput
+                : isMetadataEvaluation
+                    ? request.Arguments[1].EndsWith(
+                        "BaseTests/BaseTests.csproj",
+                        StringComparison.Ordinal
+                    )
+                        ? "false"
+                        : "true"
+                    : isRealProject
+                        ? "Passed! - /repo/tests/Real.Tests/bin/Debug/net10.0/Real.Tests.dll\n"
+                            + "Passed: 1, Failed: 0, Skipped: 0, Total: 1, Duration: 1 s"
+                        : "The selected project is not runnable.";
+            var exitCode = isSolutionListing || isMetadataEvaluation || isRealProject ? 0 : 1;
+            var lines = output.Split('\n', StringSplitOptions.None);
+
+            return Task.FromResult(
+                new CommandResult(exitCode, output, string.Empty, lines, [], TimeSpan.Zero)
+                {
+                    FileName = request.FileName,
+                    Arguments = request.Arguments,
+                    WorkingDirectory = request.WorkingDirectory,
+                }
+            );
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class FakeCommandRunner(string output) : ICommandRunner

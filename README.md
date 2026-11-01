@@ -49,22 +49,23 @@ dotnet tool install --global dotnet-test-runner-mcp --prerelease --add-source ./
 
 ## Connect your agent
 
-Add this to your MCP client's configuration and point it at the repository you want to test:
+Add this minimal configuration to your MCP client—no environment variables are required:
 
 ```json
 {
   "mcpServers": {
     "dotnet-test-runner-mcp": {
-      "command": "dotnet-test-runner-mcp",
-      "env": {
-        "WORKING_DIRECTORY": "/absolute/path/to/your-repository"
-      }
+      "command": "dotnet-test-runner-mcp"
     }
   }
 }
 ```
 
-The client starts the executable and communicates over stdio—there is no service or port to configure. On Windows, escape backslashes in JSON paths (`C:\\Repos\\MyProject`).
+The server uses the directory it is launched from as its working directory. Launch it from the repository you want to test, or have your MCP client launch it there.
+
+**Optional override:** set `WORKING_DIRECTORY` only if you want to target a different directory. Individual tool calls can also supply `workingDirectory`.
+
+The client starts the executable and communicates over stdio—there is no service or port to configure.
 
 Then ask your agent: **“Find the tests for CalculatorTests, run them, and summarize any failures.”**
 
@@ -79,17 +80,19 @@ Then ask your agent: **“Find the tests for CalculatorTests, run them, and summ
 | `run_all_tests_for_project` | Run one test project. |
 | `run_all_tests` | Run the solution's tests. |
 
-Pass a project path for targeted runs: without one, method/class tools select the first discovered test project. Every tool accepts `workingDirectory` to override the configured repository per call.
+Pass a project path for targeted runs: without one, method/class tools select the first discovered test project. Every tool accepts an optional `workingDirectory` override.
 
 ## Compatibility and settings
 
 Supports VSTest projects and TUnit-specific execution paths, plus a default MTP path. Runner detection reads direct project package references, so imported/central configuration and other MTP runners may need extra care. CTRF failure details require a compatible reporting extension; not every runner provides them. TUnit method filters use short names and can match multiple tests.
 
-Solution discovery needs a `.sln` or `.slnx` and looks under `tests` by default. Test discovery scans at most 8 projects unless you specify one explicitly.
+Solution discovery needs a `.sln` or `.slnx` and looks under `tests` by default. It scans all matching projects, excluding projects explicitly marked `IsTestProject=false`. An explicit `projectPath` does not require a solution.
+
+All environment variables below are optional.
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `WORKING_DIRECTORY` | Current directory | Repository to test. |
+| `WORKING_DIRECTORY` | Launch directory | Optional override for the repository to test. |
 | `TESTS_DIRECTORY_NAME` | `tests` | Test-project directory within the solution. |
 | `DISABLE_CTRF` | `false` | Disable CTRF switches when unsupported. |
 | `TEST_RUN_TIMEOUT_SECONDS` | `180` | Execution timeout; nonpositive values use 180 seconds. |

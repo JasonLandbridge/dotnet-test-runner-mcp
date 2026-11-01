@@ -31,4 +31,88 @@ public sealed class TestListParserTests
 
         Assert.Equal(expected, tests);
     }
+
+    [Fact]
+    public void ExtractTests_WhenTUnitListsPunctuationFreeAndSpacedNames_PreservesNames()
+    {
+        string[] lines =
+        [
+            "Build started 11/1/2026 12:00:00.",
+            "Discovering tests from /repo/tests/bin/Debug/net10.0/Reaparr.FluentResultExtension.UnitTests.dll",
+            "Discovered 6 tests in assembly - /repo/tests/bin/Debug/net10.0/Reaparr.FluentResultExtension.UnitTests.dll",
+            "  NoPunctuation",
+            "  PassedValidation",
+            "  FailedAuthorization",
+            "  SkippedCase",
+            "  ParameterizedTest(\"first value\", \"second value\")",
+            "  ParameterizedTest(\"first value\", \"third value\")",
+            string.Empty,
+            "Discovered 6 tests.",
+            "  NotAListedTest",
+            "Build succeeded.",
+        ];
+
+        var tests = TestListParser.ExtractTests(lines);
+
+        string[] expected =
+        [
+            "FailedAuthorization",
+            "NoPunctuation",
+            "ParameterizedTest(\"first value\", \"second value\")",
+            "ParameterizedTest(\"first value\", \"third value\")",
+            "PassedValidation",
+            "SkippedCase",
+        ];
+
+        Assert.Equal(expected, tests);
+    }
+
+    [Fact]
+    public void ExtractTests_WhenVSTestListsAvailableTests_StopsAtRunSummary()
+    {
+        string[] lines =
+        [
+            "Build succeeded.",
+            "Test run for /repo/tests/bin/Release/net10.0/Reaparr.Tests.dll (.NETCoreApp,Version=v10.0)",
+            "The following Tests are available:",
+            "  Reaparr.Tests.ParserTests.NoPunctuation",
+            "  Reaparr.Tests.ParserTests.ParameterizedTest(\"first value\", \"second value\")",
+            "Passed! - Failed: 0, Passed: 2, Skipped: 0, Total: 2, Duration: 1 ms",
+            "AfterSummaryIsNotATest",
+        ];
+
+        var tests = TestListParser.ExtractTests(lines);
+
+        string[] expected =
+        [
+            "Reaparr.Tests.ParserTests.NoPunctuation",
+            "Reaparr.Tests.ParserTests.ParameterizedTest(\"first value\", \"second value\")",
+        ];
+
+        Assert.Equal(expected, tests);
+    }
+
+    [Fact]
+    public void ExtractTests_WhenDisplayNamesRepeat_PreservesEachCase()
+    {
+        string[] lines =
+        [
+            "Discovered 3 tests in assembly - /repo/tests/bin/Debug/net10.0/Tests.dll",
+            "  SameDisplayName(value)",
+            "  AnotherCase",
+            "  SameDisplayName(value)",
+            "Discovered 3 tests.",
+        ];
+
+        var tests = TestListParser.ExtractTests(lines);
+
+        string[] expected =
+        [
+            "AnotherCase",
+            "SameDisplayName(value)",
+            "SameDisplayName(value)",
+        ];
+
+        Assert.Equal(expected, tests);
+    }
 }
