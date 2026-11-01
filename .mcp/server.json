@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.JasonLandbridge/dotnet-test-runner-mcp",
+  "version": "0.0.1-beta.5",
+  "description": "Discover, filter, and run .NET tests via MCP.",
+  "title": ".NET Test Runner MCP",
+  "repository": {
+    "url": "https://github.com/JasonLandbridge/dotnet-test-runner-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "nuget",
+      "identifier": "dotnet-test-runner-mcp",
+      "version": "0.0.1-beta.5",
+      "runtimeHint": "dnx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": [
+        {
+          "name": "WORKING_DIRECTORY",
+          "description": "Base directory used by tools that run dotnet commands.",
+          "placeholder": "/path/to/repo"
+        },
+        {
+          "name": "TESTS_DIRECTORY_NAME",
+          "description": "Relative folder name under WORKING_DIRECTORY that contains tests.",
+          "placeholder": "tests"
+        },
+        {
+          "name": "DISABLE_CTRF",
+          "description": "Disable CTRF report arguments for runners without CTRF support.",
+          "default": "false",
+          "format": "boolean"
+        },
+        {
+          "name": "TEST_RUN_TIMEOUT_SECONDS",
+          "description": "Timeout in seconds for test execution; nonpositive values use 180 seconds.",
+          "default": "180",
+          "format": "number"
+        }
+      ]
+    }
+  ]
+}
