@@ -1,0 +1,9 @@
+<Solution>
+    <Folder Name="/Solution Items/"/>
+    <Folder Name="/src/">
+        <Project Path="src/dotnet-test-runner-mcp/dotnet-test-runner-mcp.csproj"/>
+    </Folder>
+    <Folder Name="/tests/">
+        <Project Path="tests/dotnet-test-runner-mcp.Tests/dotnet-test-runner-mcp.Tests.csproj"/>
+    </Folder>
+</Solution>

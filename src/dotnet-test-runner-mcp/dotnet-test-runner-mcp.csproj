@@ -1,0 +1,46 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Version>0.0.1-beta.5</Version>
+
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <TrimmerSingleWarn>false</TrimmerSingleWarn>
+        <SelfContained>false</SelfContained>
+        <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+        <PackAsTool>true</PackAsTool>
+        <ToolCommandName>dotnet-test-runner-mcp</ToolCommandName>
+        <PackageId>dotnet-test-runner-mcp</PackageId>
+        <AssemblyName>dotnet-test-runner-mcp</AssemblyName>
+        <RootNamespace>DotnetTestRunnerMcp</RootNamespace>
+        <Authors>JasonLandbridge</Authors>
+        <Description>MCP server for discovering, filtering, and running .NET tests.</Description>
+        <PackageTags>dotnet;mcp;testing;mtp;tunit</PackageTags>
+        <RepositoryUrl>https://github.com/JasonLandbridge/dotnet-test-runner-mcp</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageProjectUrl>https://github.com/JasonLandbridge/dotnet-test-runner-mcp</PackageProjectUrl>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    </PropertyGroup>
+
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="dotnet-test-runner-mcp.Tests"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.2"/>
+        <PackageReference Include="ModelContextProtocol" Version="0.7.0-preview.1"/>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\..\README.md" Pack="true" PackagePath="/"/>
+        <None Include="..\..\LICENSE" Pack="true" PackagePath="/"/>
+    </ItemGroup>
+
+</Project>

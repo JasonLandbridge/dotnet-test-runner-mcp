@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "dotnet-test-runner-mcp",
+      "version-file": ".github/version.txt",
+      "initial-version": "0.1.0",
+      "include-component-in-tag": false,
+      "skip-changelog": true,
+      "extra-files": [
+        {
+          "type": "xml",
+          "path": "src/dotnet-test-runner-mcp/dotnet-test-runner-mcp.csproj",
+          "xpath": "/Project/PropertyGroup/Version"
+        },
+        {
+          "type": "json",
+          "path": ".mcp/server.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": ".mcp/server.json",
+          "jsonpath": "$.packages[0].version"
+        }
+      ]
+    }
+  }
+}

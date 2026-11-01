@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test and package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run tests
+        run: dotnet test tests/dotnet-test-runner-mcp.Tests/dotnet-test-runner-mcp.Tests.csproj -c Release -p:ContinuousIntegrationBuild=true
+
+      - name: Pack portable tool
+        run: dotnet pack src/dotnet-test-runner-mcp -c Release -o artifacts/package -p:ContinuousIntegrationBuild=true
+
+      - name: Verify executable installation
+        run: dotnet tool install dotnet-test-runner-mcp --version (Get-Content .github/version.txt) --tool-path artifacts/tools --add-source artifacts/package

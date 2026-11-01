@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+
+tasks:
+  default:
+    desc: list all tasks
+    cmds:
+      - task --list
+    silent: true
+
+  inspect:
+    desc: Run MCP Inspector against the local server
+    cmds:
+      - dotnet build src/dotnet-test-runner-mcp -c Release
+      - npx -y @modelcontextprotocol/inspector dotnet run --project src/dotnet-test-runner-mcp -c Release --no-build
+
+  nuget:pack:
+    desc: Create the portable NuGet tool package without publishing
+    cmds:
+      - dotnet pack src/dotnet-test-runner-mcp -c Release -o ./artifacts/package
+
+  nuget:publish:
+    desc: Pack and publish an explicit version to NuGet
+    silent: true
+    requires:
+      vars: [NUGET_API_KEY, VERSION]
+    cmds:
+      - dotnet pack src/dotnet-test-runner-mcp -c Release -o ./artifacts/package -p:Version={{.VERSION}}
+      - dotnet nuget push ./artifacts/package/dotnet-test-runner-mcp.{{.VERSION}}.nupkg --source https://api.nuget.org/v3/index.json --api-key {{.NUGET_API_KEY}}
+
+  inspect:release:
+    desc: Run MCP Inspector against the release server
+    cmds:
+      - npx -y @modelcontextprotocol/inspector dotnet-test-runner-mcp
