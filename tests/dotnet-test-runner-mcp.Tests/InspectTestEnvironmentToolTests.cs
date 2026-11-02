@@ -228,7 +228,7 @@ public sealed class InspectTestEnvironmentToolTests
         public Fixture() => Directory.CreateDirectory(Root);
         public string AddProject(string relativePath, string? package)
         {
-            var path = Path.Combine(Root, relativePath);
+            var path = Path.GetFullPath(Path.Combine(Root, relativePath));
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path, package is null
                 ? "<Project />"

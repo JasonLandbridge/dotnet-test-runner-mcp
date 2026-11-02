@@ -182,7 +182,7 @@ public sealed class RunnerToolTests
             var output = isSolutionListing
                 ? solutionOutput
                 : isMetadataEvaluation
-                    ? request.Arguments[1].EndsWith(
+                    ? request.Arguments[1].Replace('\\', '/').EndsWith(
                         "BaseTests/BaseTests.csproj",
                         StringComparison.Ordinal
                     )
@@ -193,7 +193,7 @@ public sealed class RunnerToolTests
                             + "Passed: 1, Failed: 0, Skipped: 0, Total: 1, Duration: 1 s"
                         : "The selected project is not runnable.";
             var exitCode = isSolutionListing || isMetadataEvaluation || isRealProject ? 0 : 1;
-            var lines = output.Split('\n', StringSplitOptions.None);
+            var lines = output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 
             return Task.FromResult(
                 new CommandResult(exitCode, output, string.Empty, lines, [], TimeSpan.Zero)

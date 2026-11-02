@@ -494,7 +494,7 @@ public sealed class RunChangedTestsToolTests
             var root = Path.Combine(Path.GetTempPath(), $"changed-tests-{Guid.NewGuid():N}");
             var solutionPath = string.IsNullOrWhiteSpace(solutionDirectory)
                 ? root
-                : Path.Combine(root, solutionDirectory);
+                : Path.GetFullPath(Path.Combine(root, solutionDirectory));
             Directory.CreateDirectory(solutionPath);
             File.WriteAllText(Path.Combine(solutionPath, "tests.slnx"), "<Solution />");
             foreach (var project in projects.Keys)

@@ -1,6 +1,8 @@
 using System.Text.Json.Nodes;
 using DotnetTestRunnerMcp.Models;
+using DotnetTestRunnerMcp.Terminal;
 using DotnetTestRunnerMcp.Tools;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Client;
 using Xunit;
 
@@ -89,14 +91,39 @@ public sealed class AgentWorkflowIntegrationTests
             StringComparison.Ordinal
         );
 
-        var changed = await Call(client, "run_changed_tests", new()
+        var gitRoot = Path.Combine(Path.GetTempPath(), $"agent-workflow-git-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(gitRoot);
+        try
         {
-            ["baseRef"] = "HEAD",
-            ["dryRun"] = true,
-        }, timeout.Token);
-        Assert.Equal("Skipped", changed["Outcome"]!.GetValue<string>());
-        Assert.True(changed["DryRun"]!.GetValue<bool>());
-        Assert.Null(changed["Execution"]);
+            await using var git = new ProcessCommandRunner(
+                Options.Create(new McpOptions { WorkingDirectory = gitRoot })
+            );
+            await git.RunAsync(new CommandRequest("git", "init"), timeout.Token);
+            await git.RunAsync(
+                new CommandRequest(
+                    "git", "-c", "user.name=Test Fixture",
+                    "-c", "user.email=fixture@example.invalid",
+                    "-c", "commit.gpgsign=false",
+                    "commit", "--allow-empty", "-m", "test fixture"
+                ),
+                timeout.Token
+            );
+            var changed = await Call(client, "run_changed_tests", new()
+            {
+                ["baseRef"] = "HEAD",
+                ["dryRun"] = true,
+                ["workingDirectory"] = gitRoot,
+            }, timeout.Token);
+            Assert.Equal("Skipped", changed["Outcome"]!.GetValue<string>());
+            Assert.True(changed["DryRun"]!.GetValue<bool>());
+            Assert.Null(changed["Execution"]);
+        }
+        finally
+        {
+            foreach (var file in Directory.EnumerateFiles(gitRoot, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(gitRoot, recursive: true);
+        }
     }
 
     private static async Task<JsonNode> Call(
