@@ -1,4 +1,5 @@
 using DotnetTestRunnerMcp.Terminal;
+using Microsoft.Extensions.Options;
 
 namespace DotnetTestRunnerMcp.Tools;
 
@@ -8,73 +9,83 @@ internal static class TestProjectDiscovery
         ICommandRunner commandRunner,
         McpOptions options,
         string? workingDirectory,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ProjectMetadataReader? metadataReader = null
     )
     {
-        var result = await commandRunner.RunAsync(
-            new CommandRequest("dotnet", "sln", "list") { WorkingDirectory = workingDirectory },
+        var candidates = await ListCandidatesAsync(
+            commandRunner,
+            options,
+            workingDirectory,
             cancellationToken
         );
 
-        if (result.StandardOutputLines.FirstOrDefault() is not "Project(s)")
-            throw new InvalidOperationException(
-                $"dotnet sln list failed: Unexpected output: {result.StandardOutput.Trim()}"
-            );
-
-        var testsDirectoryName = options.TestsDirectoryName.Replace('\\', '/').Trim('/');
-        if (string.IsNullOrWhiteSpace(testsDirectoryName))
-            return [];
-
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        var testsDirectoryPrefix = string.Concat(testsDirectoryName, "/");
-
-        var candidates = result
-            .StandardOutputLines.Skip(2)
-            .Where(project =>
-                project.Replace('\\', '/').StartsWith(testsDirectoryPrefix, comparison)
-            )
-            .ToArray();
-
+        var reader = metadataReader ?? new ProjectMetadataReader(
+            commandRunner,
+            Options.Create(options)
+        );
         var testProjects = new List<string>(candidates.Length);
         foreach (var project in candidates)
         {
-            var metadataResult = await commandRunner.RunAsync(
-                new CommandRequest(
-                    "dotnet",
-                    "msbuild",
-                    project,
-                    "-getProperty:IsTestProject",
-                    "-nologo"
-                )
-                {
-                    WorkingDirectory = workingDirectory,
-                    ThrowOnNonZeroExitCode = false,
-                },
+            var metadata = await reader.ReadProjectAsync(
+                project,
+                workingDirectory,
                 cancellationToken
             );
-
-            if (metadataResult.ExitCode != 0)
+            if (!metadata.EvaluationSucceeded)
             {
-                var details = string.IsNullOrWhiteSpace(metadataResult.StandardError)
-                    ? metadataResult.StandardOutput.Trim()
-                    : metadataResult.StandardError.Trim();
-                if (string.IsNullOrWhiteSpace(details))
-                    details = "No diagnostic output.";
                 throw new InvalidOperationException(
-                    $"dotnet msbuild metadata evaluation failed for project '{project}' "
-                        + $"with exit code {metadataResult.ExitCode}: {details}"
+                    $"dotnet msbuild metadata evaluation failed for project '{project}': "
+                        + $"{metadata.EvaluationError ?? "No diagnostic output."}"
                 );
             }
 
-            if (!IsExplicitlyFalse(metadataResult))
+            if (!IsExplicitlyFalse(metadata))
                 testProjects.Add(project);
         }
 
         return testProjects.ToArray();
     }
 
-    private static bool IsExplicitlyFalse(CommandResult result) =>
-        string.Equals(result.StandardOutput.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+    internal static async Task<string[]> ListCandidatesAsync(
+        ICommandRunner commandRunner,
+        McpOptions options,
+        string? workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await commandRunner.RunAsync(
+            new CommandRequest("dotnet", "sln", "list")
+            {
+                WorkingDirectory = workingDirectory,
+                MaxOutputChars = 8 * 1024 * 1024,
+            },
+            cancellationToken
+        );
+        if (result.StandardOutputTruncated || result.StandardErrorTruncated)
+            throw new InvalidOperationException(
+                "dotnet sln list output was truncated; test-project discovery is inconclusive."
+            );
+        if (result.StandardOutputLines.FirstOrDefault() is not "Project(s)")
+            throw new InvalidOperationException(
+                $"dotnet sln list failed: Unexpected output: {result.StandardOutput.Trim()}"
+            );
+
+        var directoryName = options.TestsDirectoryName.Replace('\\', '/').Trim('/');
+        if (string.IsNullOrWhiteSpace(directoryName))
+            return [];
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var prefix = string.Concat(directoryName, "/");
+        return result.StandardOutputLines
+            .Skip(2)
+            .Where(project => project.Replace('\\', '/').StartsWith(prefix, comparison))
+            .ToArray();
+    }
+
+    private static bool IsExplicitlyFalse(ProjectMetadata metadata) =>
+        metadata.Properties.TryGetValue("IsTestProject", out var value)
+        && string.Equals(value.Trim(), "false", StringComparison.OrdinalIgnoreCase);
 }

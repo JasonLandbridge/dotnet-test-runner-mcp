@@ -36,6 +36,14 @@ public sealed record CommandResult(
 
     public string? WorkingDirectory { get; init; }
 
+    public bool StandardOutputTruncated { get; init; }
+
+    public bool StandardErrorTruncated { get; init; }
+
+    public int StandardOutputOriginalCharacterCount { get; init; }
+
+    public int StandardErrorOriginalCharacterCount { get; init; }
+
     public string? ExceptionType { get; init; }
 
     public string? ExceptionMessage { get; init; }

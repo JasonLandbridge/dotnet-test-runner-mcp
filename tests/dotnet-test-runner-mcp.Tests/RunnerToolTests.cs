@@ -30,7 +30,10 @@ public sealed class RunnerToolTests
             Assert.Equal(TestOutcome.Failed, result.Outcome);
             Assert.Equal(3, result.TestCount);
             Assert.Equal(1, result.Failed);
-            Assert.Equal(new[] { "test", projectPath }, Assert.Single(runner.Requests).Arguments);
+            Assert.Equal(
+                new[] { "test", projectPath },
+                Assert.Single(runner.Requests.Where(request => request.Arguments[0] != "msbuild")).Arguments
+            );
         }
         finally
         {
@@ -139,6 +142,25 @@ public sealed class RunnerToolTests
         );
         return projectPath;
     }
+    private static string Metadata(string package, bool isTest = true) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                Properties = new Dictionary<string, string>
+                {
+                    ["IsTestProject"] = isTest ? "true" : "false",
+                    ["IsTestingPlatformApplication"] = "false",
+                    ["OutputType"] = "Library",
+                },
+                Items = new
+                {
+                    PackageReference = new[] { new { Identity = package } },
+                    ProjectReference = Array.Empty<object>(),
+                    Compile = Array.Empty<object>(),
+                },
+            }
+        );
+
 
     private sealed class DiscoveryFakeCommandRunner(string solutionOutput) : ICommandRunner
     {
@@ -164,8 +186,8 @@ public sealed class RunnerToolTests
                         "BaseTests/BaseTests.csproj",
                         StringComparison.Ordinal
                     )
-                        ? "false"
-                        : "true"
+                        ? Metadata("Microsoft.NET.Test.Sdk", false)
+                        : Metadata("Microsoft.NET.Test.Sdk")
                     : isRealProject
                         ? "Passed! - /repo/tests/Real.Tests/bin/Debug/net10.0/Real.Tests.dll\n"
                             + "Passed: 1, Failed: 0, Skipped: 0, Total: 1, Duration: 1 s"
@@ -196,6 +218,22 @@ public sealed class RunnerToolTests
         )
         {
             Requests.Add(request);
+            if (request.Arguments.Length > 0 && request.Arguments[0] == "msbuild")
+                return Task.FromResult(
+                    new CommandResult(
+                        0,
+                        Metadata("Microsoft.NET.Test.Sdk"),
+                        string.Empty,
+                        [Metadata("Microsoft.NET.Test.Sdk")],
+                        [],
+                        TimeSpan.Zero
+                    )
+                    {
+                        FileName = request.FileName,
+                        Arguments = request.Arguments,
+                        WorkingDirectory = request.WorkingDirectory,
+                    }
+                );
             var invocationError = request.Arguments.Contains(
                 "--report-ctrf",
                 StringComparer.Ordinal

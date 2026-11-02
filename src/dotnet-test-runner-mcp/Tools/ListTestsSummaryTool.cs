@@ -8,14 +8,20 @@ using ModelContextProtocol.Server;
 namespace DotnetTestRunnerMcp.Tools;
 
 [McpServerToolType]
-public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandRunner commandRunner)
+public sealed class ListTestsSummaryTool(
+    IOptions<McpOptions> options,
+    ICommandRunner commandRunner,
+    ProjectMetadataReader? metadataReader = null
+)
 {
     private const int MaxReturnedTests = 200;
-    private static readonly TimeSpan PerProjectListTestsTimeout = TimeSpan.FromSeconds(20);
+    private const int MaximumDiscoveryOutputCharacters = 8 * 1024 * 1024;
+    private static readonly TimeSpan PerProjectListTestsTimeout = TimeSpan.FromMinutes(3);
 
     private readonly McpOptions _options = options.ValidateNotNull().Value;
     private readonly ICommandRunner _commandRunner = commandRunner.ValidateNotNull();
-
+    private readonly ProjectMetadataReader _metadataReader =
+        metadataReader ?? new ProjectMetadataReader(commandRunner, options);
     [McpServerTool(UseStructuredContent = true)]
     [Description("Summarizes discovered tests with counts and an optional capped list.")]
     public async Task<Result> ListTestsSummary(
@@ -48,7 +54,8 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
                 _commandRunner,
                 _options,
                 trimmedWorkingDirectory,
-                cancellationToken
+                cancellationToken,
+                _metadataReader
             );
 
         if (testProjects.Length == 0)
@@ -187,7 +194,7 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
         );
     }
 
-    private async Task<ProjectDiscovery> DiscoverProjectTests(
+    internal async Task<ProjectDiscovery> DiscoverProjectTests(
         string projectPath,
         string? prefix,
         bool requireTests,
@@ -195,11 +202,42 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
         CancellationToken cancellationToken
     )
     {
-        var dialect = TestRunnerDialectDetector.Detect(projectPath, _options, workingDirectory);
+        var metadata = await _metadataReader.ReadProjectAsync(
+            projectPath,
+            workingDirectory,
+            cancellationToken
+        );
+        if (!metadata.EvaluationSucceeded)
+        {
+            var reason =
+                $"MSBuild metadata evaluation was inconclusive for '{projectPath}': "
+                + (metadata.EvaluationError ?? "No diagnostic output.");
+            var error = new ErrorInfo(ErrorKind.DiscoveryFailed, reason, null, null)
+            {
+                ProjectPath = projectPath,
+            };
+            return new ProjectDiscovery(
+                new ProjectDiscoveryResult(
+                    projectPath,
+                    TestOutcome.Error,
+                    reason,
+                    -1,
+                    0,
+                    null,
+                    error
+                ),
+                []
+            );
+        }
+
+        var dialect = metadata.Dialect;
         string[] arguments =
-            dialect == TestRunnerDialect.VSTest
-                ? ["test", projectPath, "--list-tests"]
-                : ["test", "--project", projectPath, "--list-tests", "--no-ansi", "--no-progress"];
+            dialect switch
+            {
+                TestRunnerDialect.VSTest => ["test", projectPath, "--list-tests"],
+                TestRunnerDialect.MTP => ["run", "--project", projectPath, "--", "--list-tests"],
+                _ => ["test", "--project", projectPath, "--list-tests", "--no-ansi", "--no-progress"],
+            };
 
         var commandResult = await _commandRunner.RunAsync(
             new CommandRequest("dotnet", arguments.ToArray())
@@ -207,9 +245,34 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
                 WorkingDirectory = workingDirectory,
                 ThrowOnNonZeroExitCode = false,
                 Timeout = PerProjectListTestsTimeout,
+                MaxOutputChars = MaximumDiscoveryOutputCharacters,
             },
             cancellationToken
         );
+        if (commandResult.StandardOutputTruncated || commandResult.StandardErrorTruncated)
+        {
+            const string reason =
+                "Project test discovery output was truncated; the discovered catalog is inconclusive.";
+            var error = CtrfTestRun.BuildErrorInfo(
+                commandResult,
+                reason,
+                ErrorKind.DiscoveryFailed,
+                projectPath: projectPath
+            );
+            return new ProjectDiscovery(
+                new ProjectDiscoveryResult(
+                    projectPath,
+                    TestOutcome.Error,
+                    error.Reason,
+                    commandResult.ExitCode,
+                    0,
+                    null,
+                    error
+                ),
+                []
+            );
+        }
+
 
         var discoveredTests = TestListParser.ExtractTests(commandResult.StandardOutputLines);
         var exitCode = commandResult.ExitCode;
@@ -375,7 +438,7 @@ public sealed class ListTestsSummaryTool(IOptions<McpOptions> options, ICommandR
         );
     }
 
-    private sealed record ProjectDiscovery(ProjectDiscoveryResult ProjectResult, string[] Tests);
+    internal sealed record ProjectDiscovery(ProjectDiscoveryResult ProjectResult, string[] Tests);
 
     [Description("Result containing a summarized test listing.")]
     public record Result(

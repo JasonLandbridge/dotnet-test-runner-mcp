@@ -12,7 +12,8 @@ namespace DotnetTestRunnerMcp.Tools;
 public sealed class RunAllTestsInClassTool(
     ICommandRunner commandRunner,
     JsonSerializerOptions jsonOptions,
-    IOptions<McpOptions> options
+    IOptions<McpOptions> options,
+    ProjectMetadataReader? metadataReader = null
 )
 {
     private const int MaxFailingTests = 20;
@@ -21,7 +22,8 @@ public sealed class RunAllTestsInClassTool(
     private readonly ICommandRunner _commandRunner = commandRunner.ValidateNotNull();
     private readonly JsonSerializerOptions _jsonOptions = jsonOptions.ValidateNotNull();
     private readonly McpOptions _options = options.Value.ValidateNotNull();
-
+    private readonly ProjectMetadataReader _metadataReader =
+        metadataReader ?? new ProjectMetadataReader(commandRunner, options);
     [McpServerTool(UseStructuredContent = true)]
     [Description("Runs all tests in a given test class.")]
     public async Task<Result> RunAllTestsInClass(
@@ -57,7 +59,8 @@ public sealed class RunAllTestsInClassTool(
                 _commandRunner,
                 _options,
                 trimmedWorkingDirectory,
-                cancellationToken
+                cancellationToken,
+                _metadataReader
             );
 
             if (projects.Length == 0)
@@ -82,10 +85,10 @@ public sealed class RunAllTestsInClassTool(
             trimmedProject = projects[0];
         }
 
-        var dialect = TestRunnerDialectDetector.Detect(
+        var dialect = await _metadataReader.GetDialectAsync(
             trimmedProject,
-            _options,
-            trimmedWorkingDirectory
+            trimmedWorkingDirectory,
+            cancellationToken
         );
         var supportsCtrf =
             dialect != TestRunnerDialect.TUnit && dialect != TestRunnerDialect.VSTest;

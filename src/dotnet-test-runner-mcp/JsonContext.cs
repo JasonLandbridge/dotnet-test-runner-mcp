@@ -30,6 +30,12 @@ namespace DotnetTestRunnerMcp;
     typeof(RunAllTestsInClassTool.Result),
     TypeInfoPropertyName = "RunAllTestsInClassToolResult"
 )]
+[JsonSerializable(typeof(FindTestsTool.Result), TypeInfoPropertyName = "FindTestsToolResult")]
+[JsonSerializable(typeof(RunTestsTool.Result), TypeInfoPropertyName = "RunTestsToolResult")]
+[JsonSerializable(typeof(GetFailureDetailsTool.Result), TypeInfoPropertyName = "GetFailureDetailsToolResult")]
+[JsonSerializable(typeof(InspectTestEnvironmentTool.Result), TypeInfoPropertyName = "InspectTestEnvironmentToolResult")]
+[JsonSerializable(typeof(RunChangedTestsTool.Result), TypeInfoPropertyName = "RunChangedTestsToolResult")]
+[JsonSerializable(typeof(TestSelection[]), TypeInfoPropertyName = "TestSelections")]
 [JsonSerializable(typeof(ErrorKind), TypeInfoPropertyName = "ErrorKind")]
 [JsonSerializable(typeof(ErrorInfo), TypeInfoPropertyName = "ErrorInfo")]
 [JsonSerializable(typeof(TestFailure), TypeInfoPropertyName = "TestFailure")]

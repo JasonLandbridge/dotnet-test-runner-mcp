@@ -95,6 +95,29 @@ internal static class CtrfTestRun
             cancellationToken
         );
     }
+    internal static Task<Result> ExecuteOnceAsync(
+        ICommandRunner commandRunner,
+        JsonSerializerOptions jsonOptions,
+        IReadOnlyList<string> arguments,
+        bool disableCtrf,
+        bool supportsCtrf,
+        McpOptions options,
+        string? workingDirectory,
+        CancellationToken cancellationToken
+    )
+    {
+        var runOptions = CreateRunOptions(options);
+        return ExecuteAttemptAsync(
+            commandRunner,
+            jsonOptions,
+            arguments,
+            includeCtrfArgs: !disableCtrf && supportsCtrf,
+            runOptions,
+            workingDirectory,
+            cancellationToken
+        );
+    }
+
 
     private static async Task<Result> ExecuteAttemptAsync(
         ICommandRunner commandRunner,
@@ -110,79 +133,82 @@ internal static class CtrfTestRun
         var tempPath = Path.GetTempPath();
         var fullCtrfPath = Path.Combine(tempPath, ctrfFileName);
 
-        var commandArguments = new List<string>(arguments);
-        if (includeCtrfArgs)
-            commandArguments.AddRange([
-                "--report-ctrf",
-                "--report-ctrf-filename",
-                ctrfFileName,
-                "--results-directory",
-                tempPath,
-                "--no-ansi",
-                "--no-progress",
-            ]);
-
-        CommandResult commandResult;
         try
         {
-            commandResult = await commandRunner.RunAsync(
-                new CommandRequest("dotnet", commandArguments.ToArray())
-                {
-                    WorkingDirectory = workingDirectory,
-                    ThrowOnNonZeroExitCode = false,
-                    Timeout = runOptions.Timeout,
-                    MaxOutputChars = runOptions.MaxOutputChars,
-                },
-                cancellationToken
-            );
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            commandResult = new CommandResult(-1, string.Empty, string.Empty, [], [], TimeSpan.Zero)
-            {
-                FileName = "dotnet",
-                Arguments = commandArguments.ToArray(),
-                WorkingDirectory = workingDirectory,
-                ExceptionType = exception.GetType().FullName,
-                ExceptionMessage = exception.Message,
-                ExceptionStackTrace = exception.StackTrace,
-            };
-        }
+            var commandArguments = new List<string>(arguments);
+            if (includeCtrfArgs)
+                commandArguments.AddRange([
+                    "--report-ctrf",
+                    "--report-ctrf-filename",
+                    ctrfFileName,
+                    "--results-directory",
+                    tempPath,
+                    "--no-ansi",
+                    "--no-progress",
+                ]);
 
-        CtrfReport? report = null;
-        string? readErrorMessage = null;
-        var reportFileFound = File.Exists(fullCtrfPath);
-
-        try
-        {
-            if (reportFileFound)
+            CommandResult commandResult;
+            try
             {
-                var json = await File.ReadAllTextAsync(fullCtrfPath, cancellationToken);
-#pragma warning disable IL2026, IL3050
-                report = JsonSerializer.Deserialize<CtrfReport>(json, jsonOptions);
-#pragma warning restore IL2026, IL3050
-                if (report is null)
-                    readErrorMessage = "Failed to read test results.";
+                commandResult = await commandRunner.RunAsync(
+                    new CommandRequest("dotnet", commandArguments.ToArray())
+                    {
+                        WorkingDirectory = workingDirectory,
+                        ThrowOnNonZeroExitCode = false,
+                        Timeout = runOptions.Timeout,
+                        MaxOutputChars = runOptions.MaxOutputChars,
+                    },
+                    cancellationToken
+                );
             }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch
-        {
-            readErrorMessage = "Failed to read test results.";
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                commandResult = new CommandResult(-1, string.Empty, string.Empty, [], [], TimeSpan.Zero)
+                {
+                    FileName = "dotnet",
+                    Arguments = commandArguments.ToArray(),
+                    WorkingDirectory = workingDirectory,
+                    ExceptionType = exception.GetType().FullName,
+                    ExceptionMessage = exception.Message,
+                    ExceptionStackTrace = exception.StackTrace,
+                };
+            }
+
+            CtrfReport? report = null;
+            string? readErrorMessage = null;
+            var reportFileFound = File.Exists(fullCtrfPath);
+
+            try
+            {
+                if (reportFileFound)
+                {
+                    var json = await File.ReadAllTextAsync(fullCtrfPath, cancellationToken);
+#pragma warning disable IL2026, IL3050
+                    report = JsonSerializer.Deserialize<CtrfReport>(json, jsonOptions);
+#pragma warning restore IL2026, IL3050
+                    if (report is null)
+                        readErrorMessage = "Failed to read test results.";
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                readErrorMessage = "Failed to read test results.";
+            }
+
+            return new Result(commandResult, report, reportFileFound, readErrorMessage);
         }
         finally
         {
             TryDelete(fullCtrfPath);
         }
-
-        return new Result(commandResult, report, reportFileFound, readErrorMessage);
     }
 
     internal static ErrorKind ClassifyErrorKind(
@@ -255,23 +281,19 @@ internal static class CtrfTestRun
         string? projectPath = null
     )
     {
-        var stderr = string.IsNullOrEmpty(commandResult.StandardError)
-            ? null
-            : new TruncatedText(
-                commandResult.StandardError,
-                false,
-                commandResult.StandardError.Length,
-                commandResult.StandardError.Count(c => c == '\n') + 1
-            );
+        var stderr = BuildCapturedOutput(
+            commandResult.StandardError,
+            commandResult.StandardErrorLines,
+            commandResult.StandardErrorTruncated,
+            commandResult.StandardErrorOriginalCharacterCount
+        );
 
-        var stdout = string.IsNullOrEmpty(commandResult.StandardOutput)
-            ? null
-            : new TruncatedText(
-                commandResult.StandardOutput,
-                false,
-                commandResult.StandardOutput.Length,
-                commandResult.StandardOutput.Count(c => c == '\n') + 1
-            );
+        var stdout = BuildCapturedOutput(
+            commandResult.StandardOutput,
+            commandResult.StandardOutputLines,
+            commandResult.StandardOutputTruncated,
+            commandResult.StandardOutputOriginalCharacterCount
+        );
 
         var reason = readErrorMessage;
         if (string.IsNullOrWhiteSpace(reason))
@@ -298,6 +320,29 @@ internal static class CtrfTestRun
             ExceptionMessage = commandResult.ExceptionMessage,
             ExceptionStackTrace = commandResult.ExceptionStackTrace,
         };
+    }
+
+    private static TruncatedText? BuildCapturedOutput(
+        string value,
+        IReadOnlyCollection<string> lines,
+        bool truncated,
+        int originalCharacterCount
+    )
+    {
+        var originalCount = Math.Max(value.Length, originalCharacterCount);
+        if (value.Length == 0 && originalCount == 0)
+            return null;
+
+        var wasTruncated = truncated || originalCount > value.Length;
+        var lineCount = lines.Count > 0
+            ? lines.Count
+            : value.Count(character => character == '\n') + 1;
+        return new TruncatedText(
+            value,
+            wasTruncated,
+            originalCount,
+            wasTruncated ? null : lineCount
+        );
     }
 
     internal static int? TryParseDurationMilliseconds(long? duration)

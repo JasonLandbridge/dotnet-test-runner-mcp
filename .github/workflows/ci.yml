@@ -37,4 +37,11 @@ jobs:
         run: dotnet pack src/dotnet-test-runner-mcp -c Release -o artifacts/package -p:ContinuousIntegrationBuild=true
 
       - name: Verify executable installation
-        run: dotnet tool install dotnet-test-runner-mcp --version (Get-Content .github/version.txt) --tool-path artifacts/tools --add-source artifacts/package
+        env:
+          NUGET_PACKAGES: ${{ runner.temp }}/mcp-tool-smoke-packages
+        run: dotnet tool install dotnet-test-runner-mcp --version (Get-Content .github/version.txt) --tool-path artifacts/tools --configfile .github/nuget-local.config
+
+      - name: Smoke test installed MCP executable
+        run: |
+          $tool = if ($IsWindows) { "artifacts/tools/dotnet-test-runner-mcp.exe" } else { "artifacts/tools/dotnet-test-runner-mcp" }
+          dotnet run --project tests/dotnet-test-runner-mcp.PackageSmoke -c Release -- (Join-Path $PWD $tool)

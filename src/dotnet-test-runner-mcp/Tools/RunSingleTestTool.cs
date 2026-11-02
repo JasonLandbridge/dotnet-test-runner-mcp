@@ -12,13 +12,15 @@ namespace DotnetTestRunnerMcp.Tools;
 public sealed class RunSingleTestTool(
     ICommandRunner commandRunner,
     JsonSerializerOptions jsonOptions,
-    IOptions<McpOptions> options
+    IOptions<McpOptions> options,
+    ProjectMetadataReader? metadataReader = null
 )
 {
     private readonly ICommandRunner _commandRunner = commandRunner.ValidateNotNull();
     private readonly JsonSerializerOptions _jsonOptions = jsonOptions.ValidateNotNull();
     private readonly McpOptions _options = options.Value.ValidateNotNull();
-
+    private readonly ProjectMetadataReader _metadataReader =
+        metadataReader ?? new ProjectMetadataReader(commandRunner, options);
     [McpServerTool(UseStructuredContent = true)]
     [Description("Runs a single dotnet test by fully qualified method name.")]
     public async Task<Result> RunSingleTest(
@@ -60,17 +62,18 @@ public sealed class RunSingleTestTool(
                 _commandRunner,
                 _options,
                 trimmedWorkingDirectory,
-                cancellationToken
+                cancellationToken,
+                _metadataReader
             );
 
             if (projects.Length > 0)
                 trimmedProject = projects[0];
         }
 
-        var dialect = TestRunnerDialectDetector.Detect(
+        var dialect = await _metadataReader.GetDialectAsync(
             trimmedProject,
-            _options,
-            trimmedWorkingDirectory
+            trimmedWorkingDirectory,
+            cancellationToken
         );
         var supportsCtrf =
             dialect != TestRunnerDialect.TUnit && dialect != TestRunnerDialect.VSTest;

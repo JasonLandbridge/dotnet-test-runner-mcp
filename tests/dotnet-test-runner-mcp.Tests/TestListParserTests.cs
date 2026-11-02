@@ -115,4 +115,20 @@ public sealed class TestListParserTests
 
         Assert.Equal(expected, tests);
     }
+
+    [Fact]
+    public void ExtractTests_WhenTUnitListsMethodNames_ReturnsDiscoveredTestsFromMultipleAssemblies()
+    {
+        string[] lines =
+        [
+            "Discovered 1 tests in assembly - /repo/net8.0/Tests.dll",
+            "  ShouldWork",
+            "Discovered 1 tests.",
+            "Discovered 1 tests in assembly - /repo/net10.0/Tests.dll",
+            "  ShouldWork",
+            "Discovered 1 tests.",
+        ];
+
+        Assert.Equal(new[] { "ShouldWork", "ShouldWork" }, TestListParser.ExtractTests(lines));
+    }
 }

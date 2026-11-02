@@ -6,50 +6,79 @@ namespace DotnetTestRunnerMcp.Tests;
 public sealed class TestRunnerDialectTests
 {
     [Fact]
-    public void Detect_WhenMicrosoftTestingPlatformIsOnlyPackage_ReturnsUnknown()
+    public void BuildMethodUnion_ForVSTest_UsesExactOrSegments()
     {
-        var projectPath = CreateProject("Microsoft.Testing.Platform");
-        try
-        {
-            var dialect = TestRunnerDialectDetector.Detect(projectPath, new McpOptions());
+        var built = TestCommandBuilder.TryBuildMethodUnion(
+            TestRunnerDialect.VSTest,
+            ["Tests.First.Run", "Tests.Second.Run"],
+            out var filter,
+            out var reason
+        );
 
-            Assert.Equal(TestRunnerDialect.Unknown, dialect);
-        }
-        finally
-        {
-            File.Delete(projectPath);
-        }
+        Assert.True(built, reason);
+        Assert.Equal(
+            "FullyQualifiedName=Tests.First.Run|FullyQualifiedName=Tests.Second.Run",
+            filter
+        );
+    }
+    [Fact]
+    public void BuildMethodUnion_ForTUnit_UsesTreeNodeOrSegments()
+    {
+        var built = TestCommandBuilder.TryBuildMethodUnion(
+            TestRunnerDialect.TUnit,
+            ["Tests.First.FirstRun", "Tests.Second.SecondRun"],
+            out var filter,
+            out var reason
+        );
+
+        Assert.True(built, reason);
+        Assert.Equal("/*/*/*/((FirstRun)|(SecondRun))&(*)", filter);
     }
 
     [Fact]
-    public void Detect_WhenTUnitPackageIsPresent_ReturnsTUnit()
+    public void BuildProjectRun_ForGenericMtp_UsesDotnetRunProjectPrefix()
     {
-        var projectPath = CreateProject("TUnit");
-        try
-        {
-            var dialect = TestRunnerDialectDetector.Detect(projectPath, new McpOptions());
-
-            Assert.Equal(TestRunnerDialect.TUnit, dialect);
-        }
-        finally
-        {
-            File.Delete(projectPath);
-        }
+        Assert.Equal(
+            new[] { "run", "--project", "tests/Mtp/Mtp.csproj", "--" },
+            TestCommandBuilder.BuildProjectRun(
+                TestRunnerDialect.MTP,
+                "tests/Mtp/Mtp.csproj"
+            )
+        );
     }
 
-    private static string CreateProject(string packageName)
+    [Theory]
+    [InlineData((int)TestRunnerDialect.TUnit, "Tests.Run|Other")]
+    [InlineData((int)TestRunnerDialect.TUnit, "Tests.Run*")]
+    [InlineData((int)TestRunnerDialect.VSTest, "Tests.Run|Other")]
+    [InlineData((int)TestRunnerDialect.VSTest, "Tests.Run*")]
+    public void BuildMethodUnion_RejectsRawFilterSyntax(
+        int dialect,
+        string selector
+    )
     {
-        var projectPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.csproj");
-        File.WriteAllText(
-            projectPath,
-            $"""
-            <Project>
-              <ItemGroup>
-                <PackageReference Include="{packageName}" />
-              </ItemGroup>
-            </Project>
-            """
+        var built = TestCommandBuilder.TryBuildMethodUnion(
+            (TestRunnerDialect)dialect,
+            [selector],
+            out _,
+            out var reason
         );
-        return projectPath;
+
+        Assert.False(built);
+        Assert.Contains("syntax", reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildMethodUnion_RejectsUnknownDialect()
+    {
+        var built = TestCommandBuilder.TryBuildMethodUnion(
+            TestRunnerDialect.Unknown,
+            ["Tests.Run"],
+            out _,
+            out var reason
+        );
+
+        Assert.False(built);
+        Assert.Contains("runner dialect is unknown", reason, StringComparison.OrdinalIgnoreCase);
     }
 }

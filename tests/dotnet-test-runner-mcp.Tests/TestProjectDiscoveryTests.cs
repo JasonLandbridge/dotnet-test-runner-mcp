@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DotnetTestRunnerMcp.Terminal;
 using DotnetTestRunnerMcp.Tools;
 using Microsoft.Extensions.Options;
@@ -19,9 +20,9 @@ public sealed class TestProjectDiscoveryTests
                 + "Tests/Case/Case.csproj",
             new Dictionary<string, string>
             {
-                ["tests/Good/Good.csproj"] = "true",
-                ["tests\\Windows/Windows.csproj"] = "true",
-                ["Tests/Case/Case.csproj"] = "true",
+                ["tests/Good/Good.csproj"] = Metadata(true),
+                ["tests\\Windows/Windows.csproj"] = Metadata(true),
+                ["Tests/Case/Case.csproj"] = Metadata(true),
             }
         );
         var projects = await TestProjectDiscovery.ListAsync(
@@ -51,8 +52,8 @@ public sealed class TestProjectDiscoveryTests
             $"Project(s)\n----------\n{helperProject}\n{testProject}",
             new Dictionary<string, string>
             {
-                [helperProject] = "false",
-                [testProject] = "true",
+                [helperProject] = Metadata(false),
+                [testProject] = Metadata(true),
             }
         );
 
@@ -72,7 +73,7 @@ public sealed class TestProjectDiscoveryTests
         const string project = "tests/Library.Tests/Library.Tests.csproj";
         var runner = new FakeCommandRunner(
             $"Project(s)\n----------\n{project}",
-            new Dictionary<string, string> { [project] = "true" }
+            new Dictionary<string, string> { [project] = Metadata(true) }
         );
 
         var projects = await TestProjectDiscovery.ListAsync(
@@ -91,7 +92,7 @@ public sealed class TestProjectDiscoveryTests
         const string project = "tests/Fresh/Fresh.csproj";
         var runner = new FakeCommandRunner(
             $"Project(s)\n----------\n{project}",
-            new Dictionary<string, string> { [project] = string.Empty }
+            new Dictionary<string, string> { [project] = Metadata(null) }
         );
 
         var projects = await TestProjectDiscovery.ListAsync(
@@ -110,7 +111,7 @@ public sealed class TestProjectDiscoveryTests
         const string project = "tests/Broken/Broken.csproj";
         var runner = new FakeCommandRunner(
             $"Project(s)\n----------\n{project}",
-            new Dictionary<string, string> { [project] = string.Empty },
+            new Dictionary<string, string> { [project] = Metadata(null) },
             metadataExitCode: 1,
             metadataError: "error MSB1009: Project file does not exist."
         );
@@ -182,6 +183,23 @@ public sealed class TestProjectDiscoveryTests
             Directory.Delete(rootDirectory, recursive: true);
         }
     }
+
+    private static string Metadata(bool? isTest) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                Properties = new Dictionary<string, string>
+                {
+                    ["IsTestProject"] = isTest?.ToString().ToLowerInvariant() ?? "",
+                },
+                Items = new
+                {
+                    PackageReference = Array.Empty<object>(),
+                    ProjectReference = Array.Empty<object>(),
+                    Compile = Array.Empty<object>(),
+                },
+            }
+        );
 
     private sealed class SolutionListingCommandRunner(
         ICommandRunner metadataRunner,

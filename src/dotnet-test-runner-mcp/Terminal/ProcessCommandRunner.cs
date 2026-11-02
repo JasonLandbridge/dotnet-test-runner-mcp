@@ -1,10 +1,14 @@
 using System.Diagnostics;
+using System.Text;
+
 using Microsoft.Extensions.Options;
 
 namespace DotnetTestRunnerMcp.Terminal;
 
 public sealed class ProcessCommandRunner : ICommandRunner
 {
+    private const int DefaultMaximumOutputChars = 64 * 1024;
+
     private readonly string? _defaultWorkingDirectory;
 
     public ProcessCommandRunner(IOptions<McpOptions> options)
@@ -51,21 +55,32 @@ public sealed class ProcessCommandRunner : ICommandRunner
             throw new InvalidOperationException($"Failed to start process '{request.FileName}'.");
 
         var stopwatch = Stopwatch.StartNew();
+        var maximumOutputChars = Math.Max(
+            request.MaxOutputChars ?? DefaultMaximumOutputChars,
+            0
+        );
+        var stdoutCapture = new BoundedOutputCapture(maximumOutputChars);
+        var stderrCapture = new BoundedOutputCapture(maximumOutputChars);
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (request.Timeout is not null)
             linkedCts.CancelAfter(request.Timeout.Value);
 
-        var stdoutLines = new List<string>();
-        var stderrLines = new List<string>();
-        string stdout;
-        string stderr;
+        Task stdoutTask = Task.CompletedTask;
+        Task stderrTask = Task.CompletedTask;
         var timedOut = false;
-
         try
         {
-            var stdoutTask = ReadLinesAsync(process.StandardOutput, stdoutLines, linkedCts.Token);
-            var stderrTask = ReadLinesAsync(process.StandardError, stderrLines, linkedCts.Token);
+            stdoutTask = ReadStreamAsync(
+                process.StandardOutput,
+                stdoutCapture,
+                linkedCts.Token
+            );
+            stderrTask = ReadStreamAsync(
+                process.StandardError,
+                stderrCapture,
+                linkedCts.Token
+            );
 
             try
             {
@@ -85,17 +100,20 @@ public sealed class ProcessCommandRunner : ICommandRunner
                     .ConfigureAwait(false);
             }
 
-            stdout = string.Join(Environment.NewLine, stdoutLines);
-            stderr = string.Join(Environment.NewLine, stderrLines);
             if (timedOut)
-                stderr = AppendLine(
-                    stderr,
-                    $"Command timed out after {request.Timeout!.Value.TotalSeconds:0.###} seconds."
+                stderrCapture.Append(
+                    $"{Environment.NewLine}Command timed out after {request.Timeout!.Value.TotalSeconds:0.###} seconds."
                 );
         }
         catch (OperationCanceledException)
         {
             TryKillProcess(process);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            await Task.WhenAll(
+                    SuppressCancellationAsync(stdoutTask),
+                    SuppressCancellationAsync(stderrTask)
+                )
+                .ConfigureAwait(false);
             throw;
         }
         finally
@@ -103,24 +121,24 @@ public sealed class ProcessCommandRunner : ICommandRunner
             stopwatch.Stop();
         }
 
-        if (request.MaxOutputChars is int maxOutputChars)
-        {
-            stdout = Truncate(stdout, maxOutputChars);
-            stderr = Truncate(stderr, maxOutputChars);
-        }
-
+        var stdout = stdoutCapture.GetText();
+        var stderr = stderrCapture.GetText();
         var result = new CommandResult(
             process.ExitCode,
             stdout,
             stderr,
-            stdoutLines.ToArray(),
-            stderrLines.ToArray(),
+            BoundedOutputCapture.GetLines(stdout),
+            BoundedOutputCapture.GetLines(stderr),
             stopwatch.Elapsed
         )
         {
             FileName = request.FileName,
             Arguments = request.Arguments ?? [],
             WorkingDirectory = workingDirectory,
+            StandardOutputTruncated = stdoutCapture.Truncated,
+            StandardErrorTruncated = stderrCapture.Truncated,
+            StandardOutputOriginalCharacterCount = stdoutCapture.OriginalCharacterCount,
+            StandardErrorOriginalCharacterCount = stderrCapture.OriginalCharacterCount,
         };
 
         if (request.ThrowOnNonZeroExitCode && result.ExitCode != 0)
@@ -161,30 +179,141 @@ public sealed class ProcessCommandRunner : ICommandRunner
         }
     }
 
-    private static string AppendLine(string value, string line) =>
-        string.IsNullOrWhiteSpace(value) ? line : string.Concat(value, Environment.NewLine, line);
-
-    private static async Task ReadLinesAsync(
+    private static async Task ReadStreamAsync(
         StreamReader reader,
-        List<string> lines,
+        BoundedOutputCapture capture,
         CancellationToken cancellationToken
     )
     {
+        var buffer = new char[4_096];
         while (true)
         {
-            var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
-            if (line is null)
+            var count = await reader
+                .ReadAsync(buffer.AsMemory(), cancellationToken)
+                .ConfigureAwait(false);
+            if (count == 0)
                 break;
 
-            lines.Add(line);
+            capture.Append(buffer.AsSpan(0, count));
         }
     }
 
-    private static string Truncate(string value, int maxLength)
+    private sealed class BoundedOutputCapture
     {
-        if (value.Length <= maxLength)
-            return value;
+        private const string TruncationMarker = "[output truncated]";
+        private readonly int _maximumCharacters;
+        private readonly int _headLimit;
+        private readonly int _tailLimit;
+        private readonly StringBuilder _head = new();
+        private readonly StringBuilder _tail = new();
+        private StringBuilder? _full = new();
+        private long _originalCharacterCount;
 
-        return value.Substring(0, maxLength);
+        public BoundedOutputCapture(int maximumCharacters)
+        {
+            _maximumCharacters = maximumCharacters;
+            var markerLength =
+                TruncationMarker.Length + (Environment.NewLine.Length * 2);
+            if (maximumCharacters <= markerLength)
+            {
+                _headLimit = maximumCharacters;
+                _tailLimit = 0;
+            }
+            else
+            {
+                var contentLength = maximumCharacters - markerLength;
+                _headLimit = (contentLength + 1) / 2;
+                _tailLimit = contentLength - _headLimit;
+            }
+        }
+
+        public bool Truncated { get; private set; }
+
+        public int OriginalCharacterCount =>
+            _originalCharacterCount >= int.MaxValue
+                ? int.MaxValue
+                : (int)_originalCharacterCount;
+
+        public void Append(ReadOnlySpan<char> value)
+        {
+            if (value.IsEmpty)
+                return;
+
+            _originalCharacterCount = Math.Min(
+                (long)int.MaxValue,
+                _originalCharacterCount + value.Length
+            );
+
+            if (Truncated)
+            {
+                AppendRetained(value);
+                return;
+            }
+
+            if (_maximumCharacters > 0 && _full!.Length + value.Length <= _maximumCharacters)
+            {
+                _full.Append(value);
+                return;
+            }
+
+            Truncated = true;
+            var existing = _full!.ToString();
+            _full = null;
+            AppendRetained(existing.AsSpan());
+            AppendRetained(value);
+        }
+
+        public string GetText()
+        {
+            if (!Truncated)
+                return _full?.ToString() ?? string.Empty;
+
+            if (_tailLimit == 0)
+                return _head.ToString();
+
+            return string.Concat(
+                _head,
+                Environment.NewLine,
+                TruncationMarker,
+                Environment.NewLine,
+                _tail
+            );
+        }
+
+        public static string[] GetLines(string text)
+        {
+            if (text.Length == 0)
+                return [];
+
+            return text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        }
+
+        private void AppendRetained(ReadOnlySpan<char> value)
+        {
+            var headRemaining = _headLimit - _head.Length;
+            var headCount = Math.Min(headRemaining, value.Length);
+            if (headCount > 0)
+                _head.Append(value[..headCount]);
+
+            if (_tailLimit == 0 || headCount == value.Length)
+                return;
+
+            AppendTail(value[headCount..]);
+        }
+
+        private void AppendTail(ReadOnlySpan<char> value)
+        {
+            if (value.Length >= _tailLimit)
+            {
+                _tail.Clear();
+                _tail.Append(value[^_tailLimit..]);
+                return;
+            }
+
+            var overflow = _tail.Length + value.Length - _tailLimit;
+            if (overflow > 0)
+                _tail.Remove(0, overflow);
+            _tail.Append(value);
+        }
     }
 }

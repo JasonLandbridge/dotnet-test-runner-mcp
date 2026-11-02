@@ -19,6 +19,10 @@ builder.Logging.AddConsole(consoleLogOptions =>
 
 builder.Services.Configure<McpOptions>(builder.Configuration);
 builder.Services.AddScoped<ICommandRunner, ProcessCommandRunner>();
+builder.Services.AddScoped<ProjectMetadataReader>();
+builder.Services.AddSingleton<TestDiscoverySnapshotStore>();
+builder.Services.AddSingleton<TestRunStore>();
+builder.Services.AddScoped<RunTestsTool>();
 
 var jsonOptions = new JsonSerializerOptions { TypeInfoResolver = JsonContext.Default };
 
@@ -32,6 +36,11 @@ builder
     .WithTools<RunSingleTestTool>(jsonOptions)
     .WithTools<RunAllTestsTool>(jsonOptions)
     .WithTools<RunAllTestsForProjectTool>(jsonOptions)
-    .WithTools<RunAllTestsInClassTool>(jsonOptions);
+    .WithTools<RunAllTestsInClassTool>(jsonOptions)
+    .WithTools<FindTestsTool>(jsonOptions)
+    .WithTools<RunTestsTool>(jsonOptions)
+    .WithTools<GetFailureDetailsTool>(jsonOptions)
+    .WithTools<InspectTestEnvironmentTool>(jsonOptions)
+    .WithTools<RunChangedTestsTool>(jsonOptions);
 
 await builder.Build().RunAsync();

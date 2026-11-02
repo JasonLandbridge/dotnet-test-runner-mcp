@@ -1,3 +1,4 @@
+using System.Text.Json;
 using DotnetTestRunnerMcp.Models;
 using DotnetTestRunnerMcp.Terminal;
 using DotnetTestRunnerMcp.Tools;
@@ -242,6 +243,28 @@ public sealed class ListTestsSummaryToolTests
         Assert.Equal(1, result.TestCount);
     }
 
+    [Fact]
+    public async Task ListTestsSummary_WhenDiscoveryOutputIsTruncated_ReturnsError()
+    {
+        var runner = new FakeCommandRunner(
+            CreateTestOutput(["ShouldNotBeClaimedComplete"]),
+            outputTruncated: true
+        );
+
+        var result = await CreateTool(runner)
+            .ListTestsSummary(projectPath: ProjectPath, includeTests: true);
+
+        Assert.Equal(TestOutcome.Error, result.Outcome);
+        Assert.Equal(ErrorKind.DiscoveryFailed, Assert.IsType<ErrorInfo>(result.Error).Kind);
+        Assert.Contains("truncated", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(result.Tests);
+        Assert.Single(
+            runner.Requests.Where(request =>
+                request.Arguments.Contains("--list-tests", StringComparer.Ordinal)
+            )
+        );
+    }
+
     private static ListTestsSummaryTool CreateTool(ICommandRunner commandRunner) =>
         new(Options.Create(new McpOptions()), commandRunner);
 
@@ -261,6 +284,25 @@ public sealed class ListTestsSummaryToolTests
         return projectPath;
     }
 
+    private static string Metadata(string package) =>
+        JsonSerializer.Serialize(
+            new
+            {
+                Properties = new Dictionary<string, string>
+                {
+                    ["IsTestProject"] = "true",
+                    ["IsTestingPlatformApplication"] = "false",
+                    ["OutputType"] = "Library",
+                },
+                Items = new
+                {
+                    PackageReference = new[] { new { Identity = package } },
+                    ProjectReference = Array.Empty<object>(),
+                    Compile = Array.Empty<object>(),
+                },
+            }
+        );
+
     private static string CreateTestOutput(string[] tests)
     {
         var lines = new List<string>
@@ -275,7 +317,8 @@ public sealed class ListTestsSummaryToolTests
     private sealed class FakeCommandRunner(
         string testOutput,
         IReadOnlyDictionary<string, string>? projectOutputs = null,
-        bool hasSolution = true
+        bool hasSolution = true,
+        bool outputTruncated = false
     ) : ICommandRunner
     {
         public List<CommandRequest> Requests { get; } = [];
@@ -299,7 +342,7 @@ public sealed class ListTestsSummaryToolTests
             }
             else if (request.Arguments[0] == "msbuild")
             {
-                output = "true";
+                output = Metadata("Microsoft.NET.Test.Sdk");
             }
             else
             {
@@ -317,6 +360,7 @@ public sealed class ListTestsSummaryToolTests
                     FileName = request.FileName,
                     Arguments = request.Arguments,
                     WorkingDirectory = request.WorkingDirectory,
+                    StandardOutputTruncated = outputTruncated && request.Arguments[0] != "msbuild",
                 }
             );
         }

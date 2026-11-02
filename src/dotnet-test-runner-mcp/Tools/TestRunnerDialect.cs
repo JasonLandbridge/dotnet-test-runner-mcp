@@ -5,53 +5,7 @@ internal enum TestRunnerDialect
     Unknown,
     TUnit,
     VSTest,
-}
-
-internal static class TestRunnerDialectDetector
-{
-    internal static TestRunnerDialect Detect(
-        string? projectPath,
-        McpOptions options,
-        string? workingDirectory = null
-    )
-    {
-        if (string.IsNullOrWhiteSpace(projectPath))
-            return TestRunnerDialect.Unknown;
-
-        var effectiveWorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
-            ? options.WorkingDirectory
-            : workingDirectory;
-
-        var fullPath = Path.IsPathRooted(projectPath)
-            ? projectPath
-            : Path.Combine(effectiveWorkingDirectory, projectPath);
-
-        if (!File.Exists(fullPath))
-            return TestRunnerDialect.Unknown;
-
-        var projectXml = File.ReadAllText(fullPath);
-        if (
-            ContainsPackage(projectXml, "TUnit")
-            || ContainsPackage(projectXml, "TUnit.Core")
-            || ContainsPackage(projectXml, "TUnit.Assertions")
-            || ContainsPackage(projectXml, "TUnit.Engine")
-        )
-            return TestRunnerDialect.TUnit;
-
-        if (
-            ContainsPackage(projectXml, "Microsoft.NET.Test.Sdk")
-            || ContainsPackage(projectXml, "xunit.runner.visualstudio")
-            || ContainsPackage(projectXml, "MSTest.TestAdapter")
-            || ContainsPackage(projectXml, "NUnit3TestAdapter")
-        )
-            return TestRunnerDialect.VSTest;
-
-        return TestRunnerDialect.Unknown;
-    }
-
-    private static bool ContainsPackage(string projectXml, string packageName) =>
-        projectXml.Contains($"Include=\"{packageName}\"", StringComparison.OrdinalIgnoreCase)
-        || projectXml.Contains($"Include='{packageName}'", StringComparison.OrdinalIgnoreCase);
+    MTP,
 }
 
 internal static class TestCommandBuilder
@@ -89,7 +43,8 @@ internal static class TestCommandBuilder
     internal static string[] BuildSingleTestRun(
         TestRunnerDialect dialect,
         string testName,
-        string? project
+        string? project,
+        bool exactMatch = false
     )
     {
         if (dialect == TestRunnerDialect.TUnit)
@@ -106,7 +61,12 @@ internal static class TestCommandBuilder
         if (dialect == TestRunnerDialect.VSTest)
         {
             var arguments = BuildTestCommandPrefix(dialect, project);
-            arguments.AddRange(["--filter", $"FullyQualifiedName~{testName}"]);
+            arguments.AddRange([
+                "--filter",
+                exactMatch
+                    ? $"FullyQualifiedName={testName}"
+                    : $"FullyQualifiedName~{testName}",
+            ]);
             return arguments.ToArray();
         }
 
@@ -116,11 +76,140 @@ internal static class TestCommandBuilder
         return ["test", "--filter-method", testName];
     }
 
+    /// <summary>
+    /// Builds one native method filter for a set of already-discovered selectors.
+    /// </summary>
+    internal static bool TryBuildMethodUnion(
+        TestRunnerDialect dialect,
+        IReadOnlyCollection<string> selectors,
+        out string filter,
+        out string reason
+    )
+    {
+        filter = string.Empty;
+        reason = string.Empty;
+        if (selectors.Count == 0)
+        {
+            reason = "At least one method selector is required.";
+            return false;
+        }
+
+        var distinctSelectors = selectors
+            .Where(selector => !string.IsNullOrWhiteSpace(selector))
+            .Select(selector => selector.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        if (distinctSelectors.Length == 0)
+        {
+            reason = "At least one non-empty method selector is required.";
+            return false;
+        }
+
+        foreach (var selector in distinctSelectors)
+        {
+            if (!TryValidateMethodSelector(dialect, selector, out reason))
+                return false;
+        }
+
+        if (dialect == TestRunnerDialect.VSTest)
+        {
+            filter = string.Join(
+                "|",
+                distinctSelectors.Select(selector => $"FullyQualifiedName={selector}")
+            );
+            return true;
+        }
+
+        if (dialect == TestRunnerDialect.TUnit)
+        {
+            var methods = distinctSelectors
+                .Select(ExtractMethodName)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            // TUnit 1.45.29 treats parenthesized methods as literal pre-filter hints.
+            // AND with match-all bypasses that hint without broadening the exact union:
+            // https://github.com/thomhurst/TUnit/issues/6026
+            filter = methods.Length == 1
+                ? $"/*/*/*/{methods[0]}"
+                : $"/*/*/*/({string.Join("|", methods.Select(method => $"({method})"))})&(*)";
+            return true;
+        }
+
+        reason = "Method unions require a known runner dialect.";
+        return false;
+    }
+
+    internal static bool TryValidateMethodSelector(
+        TestRunnerDialect dialect,
+        string selector,
+        out string reason
+    )
+    {
+        reason = string.Empty;
+        if (string.IsNullOrWhiteSpace(selector))
+        {
+            reason = "The method selector cannot be empty.";
+            return false;
+        }
+
+        if (dialect == TestRunnerDialect.VSTest)
+        {
+            if (!selector.Contains('.', StringComparison.Ordinal))
+            {
+                reason =
+                    $"Exact VSTest selection '{selector}' is unsupported because discovery returned a short name.";
+                return false;
+            }
+
+            if (ContainsUnsafeFilterSyntax(selector))
+            {
+                reason =
+                    $"Exact VSTest selection '{selector}' contains filter syntax and cannot be used safely.";
+                return false;
+            }
+
+            return true;
+        }
+
+        if (dialect == TestRunnerDialect.TUnit)
+        {
+            var methodName = ExtractMethodName(selector);
+            if (ContainsUnsafeFilterSyntax(methodName))
+            {
+                reason =
+                    $"Exact TUnit selection '{selector}' contains tree-filter syntax and is unsupported.";
+                return false;
+            }
+
+            try
+            {
+                _ = ValidateTreeNodeSegment(methodName, nameof(selector));
+                return true;
+            }
+            catch (ArgumentException exception)
+            {
+                reason = $"Exact TUnit selection '{selector}' is unsupported: {exception.Message}";
+                return false;
+            }
+        }
+
+        reason =
+            $"Exact method selection '{selector}' is unsupported because the runner dialect is unknown.";
+        return false;
+    }
+
     internal static string[] BuildProjectRun(TestRunnerDialect dialect, string project) =>
         BuildTestCommandPrefix(dialect, project).ToArray();
 
     private static List<string> BuildTestCommandPrefix(TestRunnerDialect dialect, string? project)
     {
+        if (dialect == TestRunnerDialect.MTP)
+        {
+            if (!string.IsNullOrWhiteSpace(project))
+                return ["run", "--project", project, "--"];
+
+            return ["run", "--"];
+        }
         if (dialect == TestRunnerDialect.TUnit)
         {
             if (!string.IsNullOrWhiteSpace(project))
@@ -172,4 +261,25 @@ internal static class TestCommandBuilder
 
         return segment;
     }
+
+    private static bool ContainsUnsafeFilterSyntax(string value) =>
+        value.Any(
+            character =>
+                character
+                    is '|'
+                        or '&'
+                        or '!'
+                        or '='
+                        or '~'
+                        or '(' 
+                        or ')'
+                        or '\\'
+                        or ';'
+                        or ','
+                        or '['
+                        or ']'
+                        or '*'
+                        or '?'
+                        or '/'
+        );
 }
