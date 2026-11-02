@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Xml.Linq;
 using DotnetTestRunnerMcp.Models;
 using DotnetTestRunnerMcp.Terminal;
 using DotnetTestRunnerMcp.Tools;
@@ -128,6 +129,118 @@ public sealed class AgentWorkflowIntegrationTests
             foreach (var file in Directory.EnumerateFiles(gitRoot, "*", SearchOption.AllDirectories))
                 File.SetAttributes(file, FileAttributes.Normal);
             Directory.Delete(gitRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task AgentWorkflow_RetainsActualFailingTestDiagnosticsAndValidatesFields()
+    {
+        var root = FindRepositoryRoot();
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), $"native-failure-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(fixtureRoot);
+        try
+        {
+            var project = Path.Combine(fixtureRoot, "NativeFailureFixture.csproj");
+            var testProject = XDocument.Load(Path.Combine(
+                root, "tests", "dotnet-test-runner-mcp.Tests", "dotnet-test-runner-mcp.Tests.csproj"
+            ));
+            new XDocument(new XElement("Project",
+                new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+                new XElement("PropertyGroup",
+                    new XElement("TargetFramework", "net10.0"),
+                    new XElement("IsTestProject", "true"),
+                    new XElement("IsPackable", "false")),
+                new XElement("ItemGroup", testProject.Descendants("PackageReference")
+                    .Select(reference => new XElement(reference)))
+            )).Save(project);
+            File.WriteAllText(Path.Combine(fixtureRoot, "NativeFailureTests.cs"), """
+                namespace NativeFailureFixture;
+                public sealed class NativeFailureTests
+                {
+                    [Xunit.Fact]
+                    public void FailsWithDiagnostic()
+                    {
+                        throw new System.InvalidOperationException("native-failure-fixture");
+                    }
+                }
+                """);
+
+            var testAssembly = typeof(AgentWorkflowIntegrationTests).Assembly.Location;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+            var transport = new StdioClientTransport(new StdioClientTransportOptions
+            {
+                Command = "dotnet",
+                Arguments = [
+                    "exec",
+                    "--runtimeconfig", Path.ChangeExtension(testAssembly, ".runtimeconfig.json"),
+                    "--depsfile", Path.ChangeExtension(testAssembly, ".deps.json"),
+                    typeof(RunTestsTool).Assembly.Location,
+                ],
+                WorkingDirectory = fixtureRoot,
+                EnvironmentVariables = new Dictionary<string, string?>
+                {
+                    ["WORKING_DIRECTORY"] = fixtureRoot,
+                    ["DOTNET_CLI_UI_LANGUAGE"] = "en",
+                },
+            });
+            await using var client = await McpClient.CreateAsync(
+                transport, cancellationToken: timeout.Token
+            );
+            var run = await Call(client, "run_tests", new()
+            {
+                ["selections"] = new[] { new TestSelection(project) },
+            }, timeout.Token);
+            Assert.Equal("Failed", run["Outcome"]!.GetValue<string>());
+            Assert.Equal(1, run["TestCount"]!.GetValue<int>());
+            Assert.Equal(1, run["Failed"]!.GetValue<int>());
+            var runId = run["RunId"]!.GetValue<string>();
+
+            var invalid = await Call(client, "get_failure_details", new()
+            {
+                ["runId"] = runId,
+                ["diagnosticField"] = "invalid-field",
+            }, timeout.Token);
+            Assert.Equal("Error", invalid["Outcome"]!.GetValue<string>());
+            Assert.Contains("message, trace, output", invalid["Message"]!.GetValue<string>());
+
+            var details = await Call(client, "get_failure_details", new()
+            {
+                ["runId"] = runId,
+                ["diagnosticField"] = "output",
+                ["maxCharacters"] = 8_000,
+            }, timeout.Token);
+            Assert.True(details["Found"]!.GetValue<bool>());
+            Assert.Equal("Failed", details["Outcome"]!.GetValue<string>());
+            var output = details["RunOutput"]!;
+            var stdout = output["StandardOutput"]?["Text"]?.GetValue<string>() ?? "";
+            var stderr = output["StandardError"]?["Text"]?.GetValue<string>() ?? "";
+            var diagnosticText = string.Concat(stdout, stderr);
+            Assert.Contains("native-failure-fixture", diagnosticText, StringComparison.Ordinal);
+            Assert.Contains(
+                "at NativeFailureFixture.NativeFailureTests.FailsWithDiagnostic()",
+                diagnosticText,
+                StringComparison.Ordinal
+            );
+            Assert.True(diagnosticText.Length <= 8_000);
+
+            var bounded = await Call(client, "get_failure_details", new()
+            {
+                ["runId"] = runId,
+                ["diagnosticField"] = "output",
+                ["maxCharacters"] = 64,
+            }, timeout.Token);
+            var boundedOutput = bounded["RunOutput"]!;
+            var boundedStdout = boundedOutput["StandardOutput"]?["Text"]?.GetValue<string>() ?? "";
+            var boundedStderr = boundedOutput["StandardError"]?["Text"]?.GetValue<string>() ?? "";
+            Assert.True(boundedStdout.Length + boundedStderr.Length <= 64);
+            Assert.True(boundedOutput["StandardOutput"]?["Truncated"]?.GetValue<bool>() == true
+                || boundedOutput["StandardError"]?["Truncated"]?.GetValue<bool>() == true);
+        }
+        finally
+        {
+            foreach (var file in Directory.EnumerateFiles(fixtureRoot, "*", SearchOption.AllDirectories))
+                File.SetAttributes(file, FileAttributes.Normal);
+            Directory.Delete(fixtureRoot, recursive: true);
         }
     }
 

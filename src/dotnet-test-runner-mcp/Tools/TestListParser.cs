@@ -1,7 +1,11 @@
+using System.Text;
+
 namespace DotnetTestRunnerMcp.Tools;
 
 internal static class TestListParser
 {
+    private const string TUnitTestIndent = "  ";
+
     internal static string[] ExtractTests(string[] lines)
     {
         if (lines.Length == 0)
@@ -9,6 +13,29 @@ internal static class TestListParser
 
         var tests = new List<string>();
         var inListSection = false;
+        var inTUnitSection = false;
+        string? pendingTest = null;
+        StringBuilder? pendingTestBuilder = null;
+        var pendingTestIsIndented = false;
+        void FlushPendingTest()
+        {
+            if (pendingTest is null)
+                return;
+
+            tests.Add((pendingTestBuilder?.ToString() ?? pendingTest).Trim());
+            pendingTest = null;
+            pendingTestBuilder = null;
+            pendingTestIsIndented = false;
+        }
+
+        void AppendContinuation(string line)
+        {
+            if (pendingTest is null)
+                return;
+
+            pendingTestBuilder ??= new StringBuilder(pendingTest);
+            pendingTestBuilder.Append('\n').Append(line);
+        }
 
         foreach (var line in lines)
         {
@@ -16,7 +43,9 @@ internal static class TestListParser
 
             if (IsListHeader(trimmed))
             {
+                FlushPendingTest();
                 inListSection = true;
+                inTUnitSection = IsTUnitAssemblyHeader(trimmed);
                 continue;
             }
 
@@ -25,16 +54,54 @@ internal static class TestListParser
 
             if (IsListBoundary(trimmed))
             {
+                FlushPendingTest();
                 inListSection = false;
+                inTUnitSection = false;
                 continue;
             }
 
-            if (IsNoiseLine(trimmed))
-                continue;
+            if (!inTUnitSection)
+            {
+                if (!IsNoiseLine(trimmed))
+                    tests.Add(trimmed);
 
-            tests.Add(trimmed);
+                continue;
+            }
+
+            // TUnit indents only the first physical line of a display name.
+            var isIndentedTest = line.StartsWith(TUnitTestIndent, StringComparison.Ordinal);
+            if (!string.IsNullOrWhiteSpace(trimmed) && isIndentedTest)
+            {
+                FlushPendingTest();
+                pendingTest = trimmed;
+                pendingTestIsIndented = true;
+                continue;
+            }
+
+            if (pendingTest is not null)
+            {
+                if (!pendingTestIsIndented && !string.IsNullOrWhiteSpace(trimmed))
+                {
+                    FlushPendingTest();
+                    pendingTest = trimmed;
+                    pendingTestIsIndented = isIndentedTest;
+                }
+                else
+                {
+                    AppendContinuation(line);
+                }
+
+                continue;
+            }
+
+            if (!IsNoiseLine(trimmed) && !string.IsNullOrWhiteSpace(trimmed))
+            {
+                pendingTest = trimmed;
+                pendingTestIsIndented = isIndentedTest;
+            }
         }
 
+        FlushPendingTest();
         return tests.OrderBy(value => value, StringComparer.Ordinal).ToArray();
     }
 

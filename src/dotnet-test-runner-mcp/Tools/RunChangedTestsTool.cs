@@ -1046,16 +1046,19 @@ internal sealed class ChangedTestsImpactAnalyzer
         if (selectedProjects.Count == 0)
             return [];
 
+        if (changedFiles.Any(IsSharedOrBuildPath))
+            return BuildSharedUnknownExplanations(selectedProjects);
+
         var reason = BuildBoundedReason(reasons, "Changed-path ownership or project impact is unknown.");
         var paths = changedFiles.Distinct(PathComparer).ToArray();
         var projectCount = Math.Min(selectedProjects.Count, MaxExplanationProjects);
         var result = new List<RunChangedTestsTool.ProjectImpactExplanation>(projectCount + 1);
+        var characterCount = 0;
         for (var projectIndex = 0; projectIndex < projectCount; projectIndex++)
         {
             var chains = new List<RunChangedTestsTool.ImpactExplanationChain>(
                 Math.Min(paths.Length, MaxExplanationChainsPerProject)
             );
-            var characterCount = 0;
             var truncated = false;
             foreach (var path in paths)
             {
@@ -1065,30 +1068,32 @@ internal sealed class ChangedTestsImpactAnalyzer
                     break;
                 }
 
-                var chainCharacters = path.Length + reason.Length;
-                if (characterCount + chainCharacters > MaxExplanationCharacters)
+                if (
+                    !TryAddExplanationChain(
+                        chains,
+                        path,
+                        null,
+                        [],
+                        reason,
+                        ref characterCount
+                    )
+                )
                 {
                     truncated = true;
                     break;
                 }
-
-                chains.Add(
-                    new RunChangedTestsTool.ImpactExplanationChain(
-                        path,
-                        null,
-                        [],
-                        reason
-                    )
-                );
-                characterCount += chainCharacters;
             }
 
-            var projectReasons = new List<string> { reason };
+            var projectReasons = new List<string>();
             if (truncated)
-                projectReasons.Add(
+            {
+                TryAddExplanationReason(
+                    projectReasons,
                     $"Explanation chains were truncated after {MaxExplanationChainsPerProject} chains "
-                        + $"or {MaxExplanationCharacters} characters."
+                        + $"or {MaxExplanationCharacters} aggregate characters.",
+                    ref characterCount
                 );
+            }
             result.Add(
                 new RunChangedTestsTool.ProjectImpactExplanation(
                     selectedProjects[projectIndex],
@@ -1096,6 +1101,41 @@ internal sealed class ChangedTestsImpactAnalyzer
                     IsUnknown: true,
                     IsTruncated: truncated,
                     Reasons: projectReasons.Distinct(StringComparer.Ordinal).ToArray()
+                )
+            );
+        }
+
+        if (selectedProjects.Count > projectCount)
+        {
+            result.Add(
+                new RunChangedTestsTool.ProjectImpactExplanation(
+                    "<additional selected projects omitted>",
+                    [],
+                    IsUnknown: true,
+                    IsTruncated: true,
+                    Reasons: [$"Explanation project output was bounded at {MaxExplanationProjects} projects."]
+                )
+            );
+        }
+
+        return result.ToArray();
+    }
+
+    private static RunChangedTestsTool.ProjectImpactExplanation[] BuildSharedUnknownExplanations(
+        IReadOnlyList<string> selectedProjects
+    )
+    {
+        var projectCount = Math.Min(selectedProjects.Count, MaxExplanationProjects);
+        var result = new List<RunChangedTestsTool.ProjectImpactExplanation>(projectCount + 1);
+        for (var projectIndex = 0; projectIndex < projectCount; projectIndex++)
+        {
+            result.Add(
+                new RunChangedTestsTool.ProjectImpactExplanation(
+                    selectedProjects[projectIndex],
+                    [],
+                    IsUnknown: true,
+                    IsTruncated: false,
+                    Reasons: []
                 )
             );
         }
@@ -1125,6 +1165,7 @@ internal sealed class ChangedTestsImpactAnalyzer
     {
         var projectCount = Math.Min(selectedProjects.Count, MaxExplanationProjects);
         var result = new List<RunChangedTestsTool.ProjectImpactExplanation>(projectCount + 1);
+        var characterCount = 0;
         for (var projectIndex = 0; projectIndex < projectCount; projectIndex++)
         {
             var selectedProject = selectedProjects[projectIndex];
@@ -1133,7 +1174,6 @@ internal sealed class ChangedTestsImpactAnalyzer
             var reasons = new List<string>();
             var unknown = false;
             var truncated = false;
-            var characterCount = 0;
 
             foreach (var pathOwnership in pathOwnerships)
             {
@@ -1179,20 +1219,25 @@ internal sealed class ChangedTestsImpactAnalyzer
                         chainReason ??=
                             $"No evaluated reverse dependency path from '{NormalizeProject(owner, solutionDirectory)}' "
                             + $"to selected test project '{selectedProjectDisplay}'.";
-                        reasons.Add(chainReason);
+                        if (!TryAddExplanationReason(reasons, chainReason, ref characterCount))
+                            truncated = true;
                     }
                     else if (dependencyPath.CycleDetected)
                     {
-                        reasons.Add(
+                        var cycleReason =
                             $"Cycle-safe traversal skipped repeated reverse-dependency edges while tracing "
-                                + $"'{pathOwnership.ChangedPath}' to '{selectedProjectDisplay}'."
-                        );
+                            + $"'{pathOwnership.ChangedPath}' to '{selectedProjectDisplay}'.";
+                        if (!TryAddExplanationReason(reasons, cycleReason, ref characterCount))
+                            truncated = true;
                     }
                     if (dependencyPath.Truncated)
                     {
                         truncated = true;
-                        if (chainReason is not null)
-                            reasons.Add(chainReason);
+                        if (
+                            chainReason is not null
+                            && !TryAddExplanationReason(reasons, chainReason, ref characterCount)
+                        )
+                            truncated = true;
                     }
 
                     var dependencyDisplay = dependencyPath.Path is null
@@ -1222,9 +1267,11 @@ internal sealed class ChangedTestsImpactAnalyzer
 
             if (truncated)
             {
-                reasons.Add(
+                TryAddExplanationReason(
+                    reasons,
                     $"Explanation chains were truncated after {MaxExplanationChainsPerProject} chains, "
-                        + $"{MaxExplanationDependencyDepth} dependency steps, or {MaxExplanationCharacters} characters."
+                        + $"{MaxExplanationDependencyDepth} dependency steps, or {MaxExplanationCharacters} aggregate characters.",
+                    ref characterCount
                 );
             }
             result.Add(
@@ -1252,6 +1299,23 @@ internal sealed class ChangedTestsImpactAnalyzer
         }
 
         return result.ToArray();
+    }
+
+    private static bool TryAddExplanationReason(
+        ICollection<string> reasons,
+        string reason,
+        ref int characterCount
+    )
+    {
+        if (reasons.Contains(reason, StringComparer.Ordinal))
+            return true;
+
+        if (characterCount + reason.Length > MaxExplanationCharacters)
+            return false;
+
+        reasons.Add(reason);
+        characterCount += reason.Length;
+        return true;
     }
 
     private static bool TryAddExplanationChain(

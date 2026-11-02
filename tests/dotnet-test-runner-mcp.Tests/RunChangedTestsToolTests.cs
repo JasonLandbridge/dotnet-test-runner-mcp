@@ -216,6 +216,104 @@ public sealed class RunChangedTestsToolTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_BoundsSharedUnknownExplanationsAcrossProjectsAndRetainsKnownProvenance()
+    {
+        var changedPaths = Enumerable
+            .Range(1, 64)
+            .Select(index => $"src/Changed/Changed{index:00}.cs")
+            .ToArray();
+        var projects = new Dictionary<string, ProjectFixture>
+        {
+            ["src/Product/Product.csproj"] = new ProjectFixture(
+                [],
+                new[] { "src/Product/Product.cs" }.Concat(changedPaths).ToArray()
+            ),
+        };
+        for (var index = 1; index <= 15; index++)
+        {
+            var project = $"tests/Product{index:00}.Tests/Product{index:00}.Tests.csproj";
+            projects[project] = ProjectFixture.Project(
+                ["src/Product/Product.csproj"],
+                $"tests/Product{index:00}.Tests/Product{index:00}Tests.cs"
+            );
+        }
+
+        var diffTokens = new List<string> { "M", "Directory.Build.props" };
+        foreach (var changedPath in changedPaths)
+        {
+            diffTokens.Add("M");
+            diffTokens.Add(changedPath);
+        }
+        using var fixture = Fixture.Create(
+            projects,
+            diff: string.Join("\0", diffTokens) + '\0'
+        );
+
+        var sharedResult = await fixture.AnalyzeAsync();
+
+        Assert.True(sharedResult.ImpactUnknown);
+        Assert.Equal(15, sharedResult.SelectedTestProjects.Length);
+        Assert.Equal(15, sharedResult.ImpactExplanations.Length);
+        Assert.Contains(
+            sharedResult.Reasons,
+            reason => reason.Contains("Shared configuration", StringComparison.Ordinal)
+        );
+        Assert.All(
+            sharedResult.ImpactExplanations,
+            explanation =>
+            {
+                Assert.True(explanation.IsUnknown);
+                Assert.False(explanation.IsTruncated);
+                Assert.Empty(explanation.Chains);
+                Assert.Empty(explanation.Reasons);
+            }
+        );
+        Assert.True(
+            JsonSerializer.Serialize(sharedResult.ImpactExplanations).Length < 32_768
+        );
+
+        fixture.Runner.SetDiff("M\0src/Product/Product.cs\0");
+        var knownResult = await fixture.AnalyzeAsync();
+
+        Assert.False(knownResult.ImpactUnknown);
+        Assert.Equal(fixture.TestProjects, knownResult.SelectedTestProjects);
+        Assert.All(
+            knownResult.ImpactExplanations,
+            explanation =>
+                Assert.Contains(
+                    explanation.Chains,
+                    chain =>
+                        chain.ChangedPath == "src/Product/Product.cs"
+                        && chain.OwnerProject == "src/Product/Product.csproj"
+                )
+        );
+        var boundedDiffTokens = new List<string>();
+        foreach (var changedPath in changedPaths)
+        {
+            boundedDiffTokens.Add("M");
+            boundedDiffTokens.Add(changedPath);
+        }
+        fixture.Runner.SetDiff(string.Join("\0", boundedDiffTokens) + '\0');
+        var boundedResult = await fixture.AnalyzeAsync();
+
+        Assert.False(boundedResult.ImpactUnknown);
+        Assert.Equal(15, boundedResult.SelectedTestProjects.Length);
+        Assert.Contains(
+            boundedResult.ImpactExplanations,
+            explanation => explanation.IsTruncated
+        );
+        var explanationCharacters = boundedResult.ImpactExplanations
+            .SelectMany(explanation => explanation.Chains)
+            .Sum(chain =>
+                chain.ChangedPath.Length
+                + (chain.OwnerProject?.Length ?? 0)
+                + chain.ReverseDependencyPath.Sum(path => path.Length)
+                + (chain.Reason?.Length ?? 0)
+            );
+        Assert.InRange(explanationCharacters, 0, 32_768);
+    }
+
+    [Fact]
     public async Task AnalyzeAsync_DeletedLinkedWildcardSelectsIndependentConsumersConservatively()
     {
         using var fixture = Fixture.Create(

@@ -42,14 +42,17 @@ public sealed class GetFailureDetailsTool(TestRunStore store)
         pageSize = Math.Clamp(pageSize, 1, MaximumPageSize);
         maxCharacters = Math.Clamp(maxCharacters, 1, MaximumCharacters);
 
-        if (!_store.TryGet(normalizedRunId, out var run))
+        var invalidField = field is not (null or "message" or "trace" or "output");
+        if (invalidField || !_store.TryGet(normalizedRunId, out var run))
         {
             return new Result(
                 normalizedRunId,
                 TestOutcome.Error,
-                string.IsNullOrEmpty(normalizedRunId)
-                    ? "A run identifier is required."
-                    : $"Run '{normalizedRunId}' was not found or has expired.",
+                invalidField
+                    ? "diagnosticField must be one of: message, trace, output, or all (or omitted)."
+                    : string.IsNullOrEmpty(normalizedRunId)
+                        ? "A run identifier is required."
+                        : $"Run '{normalizedRunId}' was not found or has expired.",
                 false,
                 0,
                 0,
@@ -186,12 +189,6 @@ public sealed class GetFailureDetailsTool(TestRunStore store)
         var normalized = diagnosticField?.Trim().ToLowerInvariant();
         if (string.IsNullOrEmpty(normalized) || normalized == "all")
             return null;
-
-        if (normalized is not ("message" or "trace" or "output"))
-            throw new ArgumentException(
-                "diagnosticField must be one of: message, trace, output.",
-                nameof(diagnosticField)
-            );
 
         return normalized;
     }
@@ -415,10 +412,10 @@ public sealed class GetFailureDetailsTool(TestRunStore store)
     [Description("Result of retrieving retained failure details.")]
     public sealed record Result(
         [property: Description("Run identifier queried.")] string RunId,
-        [property: Description("Retained run outcome, or Error when the identifier is missing.")]
+        [property: Description("Retained run outcome, or Error for invalid input or a missing identifier.")]
             TestOutcome Outcome,
         [property: Description("Short retrieval status message.")] string Message,
-        [property: Description("True when the run exists in the in-memory store.")] bool Found,
+        [property: Description("True when a valid request found the run in the in-memory store.")] bool Found,
         [property: Description("Number of retained per-test failures returned by the store.")]
             int TotalFailures,
         [property: Description("Number of failures reported before retention bounds.")]

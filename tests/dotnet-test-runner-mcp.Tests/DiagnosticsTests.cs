@@ -96,6 +96,30 @@ public sealed class DiagnosticsTests
     }
 
     [Fact]
+    public void GetFailureDetails_InvalidFieldReturnsActionableErrorWithoutChangingRetainedRun()
+    {
+        var store = new TestRunStore();
+        store.Store(new TestRunStore.RunRecord(
+            "validation", default, [], new("retained output")
+        ));
+        var tool = new GetFailureDetailsTool(store);
+
+        var invalid = tool.GetFailureDetails(
+            "validation", diagnosticField: "invalid-field", includeOutput: true
+        );
+
+        Assert.Equal(TestOutcome.Error, invalid.Outcome);
+        Assert.Contains("diagnosticField", invalid.Message, StringComparison.Ordinal);
+        Assert.Contains("message, trace, output", invalid.Message, StringComparison.Ordinal);
+        Assert.Empty(invalid.Failures);
+        Assert.Null(invalid.RunOutput);
+        Assert.False(invalid.HasMore);
+        var valid = tool.GetFailureDetails("validation", diagnosticField: "output");
+        Assert.True(valid.Found);
+        Assert.Equal("retained output", valid.RunOutput?.StandardOutput?.Text);
+    }
+
+    [Fact]
     public void GetFailureDetails_HasMoreOnlyForRetrievablePages()
     {
         var store = new TestRunStore();

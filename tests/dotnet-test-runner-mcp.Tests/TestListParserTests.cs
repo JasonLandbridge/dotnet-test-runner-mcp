@@ -33,6 +33,55 @@ public sealed class TestListParserTests
     }
 
     [Fact]
+    public void ExtractTests_WhenTUnitDisplayNameContainsNewline_ReconstructsSingleTest()
+    {
+        string[] lines =
+        [
+            "Discovered 3 tests in assembly - /repo/tests/bin/Debug/net10.0/Tests.dll",
+            "  ShouldValidateIpOrCidrCorrectly(",
+            ", False)",
+            "  ShouldSupportAllMappingTypes",
+            "  ShouldHandleParentheses(value (inner))",
+            "Discovered 3 tests.",
+        ];
+
+        var tests = TestListParser.ExtractTests(lines);
+
+        string[] expected =
+        [
+            "ShouldHandleParentheses(value (inner))",
+            "ShouldSupportAllMappingTypes",
+            "ShouldValidateIpOrCidrCorrectly(\n, False)",
+        ];
+
+        Assert.Equal(expected, tests);
+    }
+
+    [Fact]
+    public void ExtractTests_WhenTUnitDisplayNameContainsBlankContinuation_PreservesIt()
+    {
+        string[] lines =
+        [
+            "Discovered 2 tests in assembly - /repo/tests/bin/Debug/net10.0/Tests.dll",
+            "  TestWithBlankContinuation(",
+            string.Empty,
+            ", False)",
+            "  TestAfterContinuation",
+            "Discovered 2 tests.",
+        ];
+
+        var tests = TestListParser.ExtractTests(lines);
+
+        string[] expected =
+        [
+            "TestAfterContinuation",
+            "TestWithBlankContinuation(\n\n, False)",
+        ];
+
+        Assert.Equal(expected, tests);
+    }
+
+    [Fact]
     public void ExtractTests_WhenTUnitListsPunctuationFreeAndSpacedNames_PreservesNames()
     {
         string[] lines =
