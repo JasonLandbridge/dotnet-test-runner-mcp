@@ -73,16 +73,9 @@ public sealed class ProcessCommandRunner : ICommandRunner
         var timedOut = false;
         try
         {
-            stdoutTask = ReadStreamAsync(
-                process.StandardOutput,
-                stdoutCapture,
-                linkedCts.Token
-            );
-            stderrTask = ReadStreamAsync(
-                process.StandardError,
-                stderrCapture,
-                linkedCts.Token
-            );
+            // Kill the producer on cancellation, then drain bytes already in its pipes.
+            stdoutTask = ReadStreamAsync(process.StandardOutput, stdoutCapture);
+            stderrTask = ReadStreamAsync(process.StandardError, stderrCapture);
 
             try
             {
@@ -95,11 +88,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
                 timedOut = true;
                 TryKillProcess(process);
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                await Task.WhenAll(
-                        SuppressCancellationAsync(stdoutTask),
-                        SuppressCancellationAsync(stderrTask)
-                    )
-                    .ConfigureAwait(false);
+                await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             }
 
             if (timedOut)
@@ -111,11 +100,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
         {
             TryKillProcess(process);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            await Task.WhenAll(
-                    SuppressCancellationAsync(stdoutTask),
-                    SuppressCancellationAsync(stderrTask)
-                )
-                .ConfigureAwait(false);
+            await Task.WhenAll(stdoutTask, stderrTask).ConfigureAwait(false);
             throw;
         }
         finally
@@ -169,29 +154,16 @@ public sealed class ProcessCommandRunner : ICommandRunner
         }
     }
 
-    private static async Task SuppressCancellationAsync(Task task)
-    {
-        try
-        {
-            await task.ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Preserve output captured before the timeout.
-        }
-    }
-
     private static async Task ReadStreamAsync(
         StreamReader reader,
-        BoundedOutputCapture capture,
-        CancellationToken cancellationToken
+        BoundedOutputCapture capture
     )
     {
         var buffer = new char[4_096];
         while (true)
         {
             var count = await reader
-                .ReadAsync(buffer.AsMemory(), cancellationToken)
+                .ReadAsync(buffer.AsMemory())
                 .ConfigureAwait(false);
             if (count == 0)
                 break;
