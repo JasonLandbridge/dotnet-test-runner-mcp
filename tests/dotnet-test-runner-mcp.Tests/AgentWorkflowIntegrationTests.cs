@@ -117,6 +117,11 @@ public sealed class AgentWorkflowIntegrationTests
             Assert.Equal("Skipped", changed["Outcome"]!.GetValue<string>());
             Assert.True(changed["DryRun"]!.GetValue<bool>());
             Assert.Null(changed["Execution"]);
+            var retainedAfterGit = await Call(client, "get_failure_details", new()
+            {
+                ["runId"] = runId,
+            }, timeout.Token);
+            Assert.True(retainedAfterGit["Found"]!.GetValue<bool>());
         }
         finally
         {

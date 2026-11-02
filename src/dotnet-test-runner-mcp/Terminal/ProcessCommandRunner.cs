@@ -28,6 +28,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
 
         var startInfo = new ProcessStartInfo(request.FileName)
         {
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -53,6 +54,7 @@ public sealed class ProcessCommandRunner : ICommandRunner
         process.StartInfo = startInfo;
         if (!process.Start())
             throw new InvalidOperationException($"Failed to start process '{request.FileName}'.");
+        process.StandardInput.Close();
 
         var stopwatch = Stopwatch.StartNew();
         var maximumOutputChars = Math.Max(

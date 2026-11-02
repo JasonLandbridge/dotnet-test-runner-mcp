@@ -7,6 +7,25 @@ namespace DotnetTestRunnerMcp.Tests;
 public sealed class ProcessCommandRunnerTests
 {
     [Fact]
+    public async Task RunAsync_ClosesChildInputWithoutConsumingAgentProtocolInput()
+    {
+        await using var runner = new ProcessCommandRunner(Options.Create(new McpOptions()));
+        var request = OperatingSystem.IsWindows()
+            ? new CommandRequest(
+                "powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                "[Console]::In.ReadToEnd() | Out-Null; [Console]::Write('stdin-eof')"
+            )
+            : new CommandRequest("bash", "-c", "cat >/dev/null; printf stdin-eof");
+
+        var result = await runner.RunAsync(
+            request with { Timeout = TimeSpan.FromSeconds(10), ThrowOnNonZeroExitCode = false }
+        );
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("stdin-eof", result.StandardOutput);
+    }
+
+    [Fact]
     public async Task RunAsync_WhenProcessTimesOut_ReturnsCapturedStdoutAndStderr()
     {
         await using var runner = new ProcessCommandRunner(Options.Create(new McpOptions()));
